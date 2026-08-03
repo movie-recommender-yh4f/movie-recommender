@@ -25,5 +25,16 @@ export default withNuxt(
       'no-debugger': 'warn',
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
+  },
+  {
+    files: ['test/load/**/*.js'],
+    languageOptions: {
+      globals: {
+        __ENV: 'readonly',
+        __ITER: 'readonly',
+        __VU: 'readonly',
+        open: 'readonly',
+      },
+    },
   }
 )

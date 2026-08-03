@@ -20,3 +20,9 @@ logs
 .env
 .env.*
 !.env.example
+# Local load-test credentials and generated results
+test/load/.env
+test/load/data/*
+!test/load/data/.gitkeep
+test/load/results/*
+!test/load/results/.gitkeep

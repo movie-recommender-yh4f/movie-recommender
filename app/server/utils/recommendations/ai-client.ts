@@ -1,6 +1,7 @@
 import type { H3Event } from 'h3'
 import OpenAI from 'openai'
 import { logPrivateError, throwConfigError } from '../shared/api-error'
+import { askMockPlatformAi } from './mock-ai-provider'
 import { recommendationLimiter, RECOMMENDATION_LIMIT } from './rate-limit'
 
 const GOOGLE_AI_STUDIO_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/'
@@ -177,7 +178,10 @@ function getProviderErrorMessage(error: unknown): string {
 function createProviderError(error: unknown, context: ProviderErrorContext): Error {
   const statusCode = getProviderErrorStatusCode(error)
   const providerError = createError({
-    statusCode: statusCode === TOO_MANY_REQUESTS_STATUS_CODE ? TOO_MANY_REQUESTS_STATUS_CODE : BAD_GATEWAY_STATUS_CODE,
+    statusCode:
+      statusCode === TOO_MANY_REQUESTS_STATUS_CODE
+        ? TOO_MANY_REQUESTS_STATUS_CODE
+        : BAD_GATEWAY_STATUS_CODE,
     statusMessage: GENERATE_RECOMMENDATIONS_MESSAGE,
   })
 
@@ -211,7 +215,9 @@ function getAttemptFromError(
       ? record.causeMessage
       : getProviderErrorMessage(error)
   const originalStatusCode =
-    typeof record.originalStatusCode === 'number' ? record.originalStatusCode : getProviderErrorStatusCode(error)
+    typeof record.originalStatusCode === 'number'
+      ? record.originalStatusCode
+      : getProviderErrorStatusCode(error)
 
   return {
     provider,
@@ -223,12 +229,13 @@ function getAttemptFromError(
 }
 
 function attachAttempts(error: unknown, attempts: ProviderAttempt[]): Error {
-  const providerError = error instanceof Error
-    ? error
-    : createError({
-        statusCode: BAD_GATEWAY_STATUS_CODE,
-        statusMessage: GENERATE_RECOMMENDATIONS_MESSAGE,
-      })
+  const providerError =
+    error instanceof Error
+      ? error
+      : createError({
+          statusCode: BAD_GATEWAY_STATUS_CODE,
+          statusMessage: GENERATE_RECOMMENDATIONS_MESSAGE,
+        })
 
   return Object.assign(providerError, { attempts })
 }
@@ -292,6 +299,11 @@ async function createChatCompletion(
 }
 
 export async function askPlatformAi(request: PlatformAiRequest): Promise<string> {
+  const mockResponse = await askMockPlatformAi(request)
+  if (mockResponse !== null) {
+    return mockResponse
+  }
+
   const providers = getPlatformAiProviderConfig(request.event, request.userId)
 
   if ((request.rateLimit ?? true) && request.userId) {
