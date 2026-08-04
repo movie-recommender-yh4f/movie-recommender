@@ -22,9 +22,13 @@ const DURATION = boundedDuration(
   10 * 60,
   'ALLOW_LONG_RECOMMENDATIONS'
 )
+
 const EXPECTED_STATUSES = parseCsv(__ENV.EXPECTED_RECOMMENDATION_STATUSES).map((status) =>
   Number(status)
 )
+
+const EFFECTIVE_EXPECTED_STATUSES = EXPECTED_STATUSES.length > 0 ? EXPECTED_STATUSES : [200]
+
 if (
   EFFECTIVE_EXPECTED_STATUSES.some(
     (status) => !Number.isInteger(status) || status < 100 || status > 599
@@ -32,8 +36,6 @@ if (
 ) {
   throw new Error('EXPECTED_RECOMMENDATION_STATUSES contains an invalid HTTP status.')
 }
-
-const EFFECTIVE_EXPECTED_STATUSES = EXPECTED_STATUSES.length > 0 ? EXPECTED_STATUSES : [200]
 
 export const options = {
   scenarios: {

@@ -11,6 +11,9 @@ const DURATION_FACTORS = {
 const DEFAULT_UNEXPECTED_FAILURE_RATE = 0.01
 const DEFAULT_API_P95_MS = 1_000
 const MIN_URL_LENGTH = 8
+const ABSOLUTE_URL_PATTERN =
+  /^(https?):\/\/(?:[^/?#@]+@)?(\[[0-9a-f:.]+\]|[^/:?#]+)(?::\d+)?(?:[/?#]|$)/i
+const IPV6_BRACKETS_PATTERN = /^\[|\]$/g
 
 export function requiredEnv(name) {
   const value = (__ENV[name] || '').trim()
@@ -83,10 +86,8 @@ export function getBaseUrl() {
     throw new Error('BASE_URL is invalid.')
   }
 
-  let parsed
-  try {
-    parsed = new URL(rawUrl)
-  } catch {
+  const parsed = parseAbsoluteUrl(rawUrl)
+  if (!parsed) {
     throw new Error('BASE_URL must be an absolute URL.')
   }
 
@@ -98,7 +99,24 @@ export function getBaseUrl() {
 }
 
 export function getTargetHostname() {
-  return new URL(getBaseUrl()).hostname.toLowerCase()
+  const parsed = parseAbsoluteUrl(getBaseUrl())
+  if (!parsed) {
+    throw new Error('BASE_URL must be an absolute URL.')
+  }
+
+  return parsed.hostname
+}
+
+function parseAbsoluteUrl(value) {
+  const match = ABSOLUTE_URL_PATTERN.exec(value)
+  if (!match) {
+    return null
+  }
+
+  return {
+    protocol: match[1].toLowerCase() + ':',
+    hostname: match[2].replace(IPV6_BRACKETS_PATTERN, '').toLowerCase(),
+  }
 }
 
 export function isLocalTarget() {
