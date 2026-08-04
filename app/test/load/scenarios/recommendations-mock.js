@@ -14,6 +14,9 @@ import { recommendOnce } from '../helpers/workflows.js'
 
 const PROFILE = 'recommendations-mock'
 const RECOMMEND_ROUTE = '/api/recommend'
+const DEFAULT_RECOMMENDATION_MOCK_P95_MS = 6_500
+const MIN_RECOMMENDATION_MOCK_P95_MS = 1_000
+const MAX_RECOMMENDATION_MOCK_P95_MS = 30_000
 const VUS = optionalInteger('RECOMMENDATION_VUS', 5, 1, 50)
 const ITERATIONS_PER_VU = optionalInteger('RECOMMENDATION_ITERATIONS_PER_VU', 1, 1, 5)
 const DURATION = boundedDuration(
@@ -22,6 +25,15 @@ const DURATION = boundedDuration(
   10 * 60,
   'ALLOW_LONG_RECOMMENDATIONS'
 )
+
+const RECOMMENDATION_MOCK_P95_MS = optionalInteger(
+  'RECOMMENDATION_MOCK_P95_MS_THRESHOLD',
+  DEFAULT_RECOMMENDATION_MOCK_P95_MS,
+  MIN_RECOMMENDATION_MOCK_P95_MS,
+  MAX_RECOMMENDATION_MOCK_P95_MS
+)
+const THRESHOLDS = getProvisionalThresholds()
+THRESHOLDS.route_duration = ['p(95)<' + RECOMMENDATION_MOCK_P95_MS]
 
 const EXPECTED_STATUSES = parseCsv(__ENV.EXPECTED_RECOMMENDATION_STATUSES).map((status) =>
   Number(status)
@@ -35,6 +47,14 @@ if (
   )
 ) {
   throw new Error('EXPECTED_RECOMMENDATION_STATUSES contains an invalid HTTP status.')
+}
+
+const RECOMMENDATION_DURATION_THRESHOLD_KEY =
+  'route_duration{route:/api/recommend,scenario:recommendations-mock}'
+const RECOMMENDATION_THRESHOLDS = {
+  unexpected_failures: THRESHOLDS.unexpected_failures,
+  timeout_rate: THRESHOLDS.timeout_rate,
+  [RECOMMENDATION_DURATION_THRESHOLD_KEY]: ['p(95)<' + RECOMMENDATION_MOCK_P95_MS],
 }
 
 export const options = {
@@ -54,7 +74,7 @@ export const options = {
       maxDuration: '45s',
     },
   },
-  thresholds: getProvisionalThresholds(),
+  thresholds: RECOMMENDATION_THRESHOLDS,
 }
 
 export function setup() {

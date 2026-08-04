@@ -30,6 +30,10 @@ export function classifyAuthResponse(response, options) {
 
 export function classifyRecommendationResponse(response, options) {
   const result = classifyResponse(response, options)
+  const tags = {
+    scenario: options.scenario,
+    provider_mode: options.providerMode || 'unknown',
+  }
   let body = null
 
   try {
@@ -43,18 +47,17 @@ export function classifyRecommendationResponse(response, options) {
   const partialRecovery =
     response.status === 200 && body?.stale === true && Array.isArray(body?.staleRecommendations)
 
-  recommendationSuccessRate.add(success, {
-    scenario: options.scenario,
-    provider_mode: options.providerMode || 'unknown',
-  })
-  recommendationParseFailureRate.add(parseFailure, {
-    scenario: options.scenario,
-    provider_mode: options.providerMode || 'unknown',
-  })
-  partialRecoveryRate.add(partialRecovery, {
-    scenario: options.scenario,
-    provider_mode: options.providerMode || 'unknown',
-  })
+  if (response.status === 200) {
+    recommendationSuccessRate.add(success, tags)
+  }
+
+  if (response.status === 502) {
+    recommendationParseFailureRate.add(parseFailure, tags)
+  }
+
+  if (response.status === 200 && body?.stale === true) {
+    partialRecoveryRate.add(partialRecovery, tags)
+  }
 
   return {
     ...result,
