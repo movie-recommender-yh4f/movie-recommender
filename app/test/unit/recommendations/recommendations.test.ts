@@ -5,7 +5,7 @@ const { createClientMock } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
 }))
 
-const rpcMock = vi.fn((_name: string, args: { search_candidates: Array<{ query: string; year?: number }> }) => Promise.resolve({ data: args.search_candidates.flatMap(({ query, year }) => { const normalized = query.toLowerCase(); const tmdbId = normalized === 'suspiria' ? (year === 1977 ? 11907 : 11906) : normalized === 'stalker' ? 1398 : normalized === 'alien' ? 1 : normalized.startsWith('candidate ') ? 1000 + Number.parseInt(normalized.slice('candidate '.length), 10) - 1 : normalized === 'replacement one' ? 2000 : normalized === 'replacement two' ? 2001 : null; return tmdbId === null ? [] : [{ query, year: year ?? null, tmdb_id: tmdbId, original_title: query, popularity: 50, release_date: (year ?? 2000).toString() + '-01-01' }]; }), error: null }))
+const rpcMock = vi.fn((_name: string, args: { search_candidates: Array<{ query: string; year?: number }> }) => Promise.resolve({ data: args.search_candidates.flatMap(({ query, year }) => { const normalized = query.toLowerCase(); const tmdbId = normalized === 'suspiria' ? (year === 1977 ? 11907 : 11906) : normalized === 'stalker' ? 1398 : normalized === 'alien' ? 1 : normalized.startsWith('candidate ') ? 1000 + Number.parseInt(normalized.slice('candidate '.length), 10) - 1 : normalized.startsWith('recovered ') ? 1400 + Number.parseInt(normalized.slice('recovered '.length), 10) - 1 : normalized === 'replacement one' ? 2000 : normalized === 'replacement two' ? 2001 : null; return tmdbId === null ? [] : [{ query, year: year ?? null, tmdb_id: tmdbId, original_title: query, popularity: 50, release_date: (year ?? 2000).toString() + '-01-01' }]; }), error: null }))
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: createClientMock,
@@ -29,6 +29,7 @@ vi.mock('../../../server/utils/recommendations/ai-client', () => ({
 
 const {
   getInitialRecommendationCount,
+  INITIAL_RECOMMENDATION_COUNT,
   MAX_MY_LIST_RECOMMENDATIONS,
 } = await import('../../../server/utils/recommendations/constants')
 const { appendTmdbIds } = await import('../../../server/utils/recommendations/movie-id-matching')
