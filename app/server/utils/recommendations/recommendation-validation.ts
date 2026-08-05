@@ -46,7 +46,8 @@ export function toBlockedExcludedRecommendations(
 export function createRecommendationValidationState(
   watchedMovies: WatchedMovieRecord[],
   myListMovies: WatchedMovieRecord[],
-  blockedRecommendations: BlockedRecommendation[] = []
+  blockedRecommendations: BlockedRecommendation[] = [],
+  blockedTmdbIds: number[] = []
 ): RecommendationValidationState {
   const blockedIds = new Set<number>()
   const blockedTitleKeys = new Set<string>()
@@ -57,6 +58,10 @@ export function createRecommendationValidationState(
     }
 
     blockedTitleKeys.add(toBlockedTitleKey(recommendation))
+  }
+
+  for (const tmdbId of blockedTmdbIds) {
+    blockedIds.add(tmdbId)
   }
 
   return {

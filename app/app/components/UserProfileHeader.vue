@@ -105,7 +105,7 @@
         </div>
         <div class="text-right">
           <p class="text-xl font-black text-zinc-950 dark:text-white">
-            {{ quota.remaining }} / {{ quota.limit }}
+            {{ quota.remaining }} / {{ RECOMMENDATION_LIMIT }}
           </p>
           <p class="text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">
             Requests left
@@ -185,7 +185,7 @@
         <button
           v-if="showInstallOption"
           class="group flex min-h-14 w-full items-center justify-between border-b border-zinc-200 px-4 py-3 text-left transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/40"
-          @click="install"
+          @click="openInstallModal"
         >
           <span class="flex items-center gap-3">
             <span
@@ -255,6 +255,70 @@
             <span class="font-semibold text-red-600 dark:text-red-400">Log Out</span>
           </span>
         </button>
+      </div>
+    </section>
+
+    <section class="pb-8">
+      <button
+        class="group flex min-h-14 w-full items-center justify-between rounded-[1.25rem] border border-red-200 bg-white px-4 py-3 text-left shadow-sm transition-colors hover:bg-red-50 dark:border-red-900 dark:bg-zinc-950/80 dark:hover:bg-red-950/20"
+        @click="openDeleteAccountModal"
+      >
+        <span class="flex items-center gap-3">
+          <span
+            class="flex h-8 w-8 items-center justify-center rounded-full border border-red-200 text-red-500 transition-colors group-hover:border-red-500 group-hover:text-red-600 dark:border-red-900 dark:text-red-400 dark:group-hover:border-red-300 dark:group-hover:text-red-300"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.75"
+                d="M10 11v6m4-6v6m-7 4h10a2 2 0 002-2V7H5v12a2 2 0 002 2zm8-14V4a1 1 0 00-1-1H10a1 1 0 00-1 1v1H4"
+              />
+            </svg>
+          </span>
+          <span class="font-semibold text-red-600 dark:text-red-400">Delete Account</span>
+        </span>
+        <span
+          class="text-red-300 transition-colors group-hover:text-red-600 dark:text-red-900 dark:group-hover:text-red-300"
+          >&rarr;</span
+        >
+      </button>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="mb-4 text-[11px] font-black uppercase tracking-[0.28em] text-zinc-500">
+        About & Legal
+      </h2>
+
+      <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-3 px-1 text-center">
+        <NuxtLink
+          v-for="link in LEGAL_PAGE_LINKS"
+          :key="link.href"
+          :to="link.href"
+          class="group inline-flex items-center gap-2 text-sm font-semibold text-zinc-500 transition-colors hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white"
+        >
+          <span class="flex min-w-0 items-center gap-2">
+            <span
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors group-hover:text-zinc-700 dark:text-zinc-500 dark:group-hover:text-zinc-200"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  d="M4.75 6.75A1.75 1.75 0 016.5 5h11A1.75 1.75 0 0119.25 6.75v10.5A1.75 1.75 0 0117.5 19h-11a1.75 1.75 0 01-1.75-1.75V6.75zM8 9h8M8 12h8m-8 3h5"
+                />
+              </svg>
+            </span>
+
+            <span class="min-w-0">{{ link.label }}</span>
+          </span>
+
+          <span
+            class="shrink-0 text-zinc-300 transition-colors group-hover:text-zinc-700 dark:text-zinc-700 dark:group-hover:text-zinc-300"
+            >&rarr;</span
+          >
+        </NuxtLink>
       </div>
     </section>
   </section>
@@ -339,9 +403,9 @@
   <Teleport to="body">
     <Transition name="fade">
       <div
-        v-if="showIosModal"
+        v-if="isDeleteAccountModalOpen"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-        @click.self="showIosModal = false"
+        @click.self="closeDeleteAccountModal"
       >
         <div
           class="flex w-full max-w-md flex-col gap-4 rounded-[1.25rem] border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-glow"
@@ -349,13 +413,16 @@
           <div class="flex items-start justify-between gap-4">
             <div>
               <h3 class="text-2xl font-black tracking-[-0.04em] text-zinc-950 dark:text-white">
-                Install on iPhone
+                Delete Account
               </h3>
-              <p class="mt-1 text-sm text-zinc-500">Add NextWatch to your Home Screen.</p>
+              <p class="mt-1 text-sm text-zinc-500">
+                Type <strong>delete account</strong> to permanently remove your account.
+              </p>
             </div>
             <button
-              class="text-zinc-500 transition-colors hover:text-zinc-950 dark:hover:text-white"
-              @click="showIosModal = false"
+              class="text-zinc-500 transition-colors hover:text-zinc-950 disabled:opacity-50 dark:hover:text-white"
+              :disabled="isDeletingAccount"
+              @click="closeDeleteAccountModal"
             >
               <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -368,71 +435,48 @@
             </button>
           </div>
 
-          <ol class="flex flex-col gap-3 text-sm text-zinc-700 dark:text-zinc-300">
-            <li class="flex items-center gap-3">
-              <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-xs font-black text-white dark:bg-white dark:text-black"
-                >1</span
-              >
-              <span class="flex items-center gap-1.5">
-                Tap the
-                <svg
-                  class="inline h-5 w-5 text-zinc-950 dark:text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="1.75"
-                    d="M12 16V4m0 0L8 8m4-4l4 4M6 12v6a2 2 0 002 2h8a2 2 0 002-2v-6"
-                  />
-                </svg>
-                Share button.
-              </span>
-            </li>
-            <li class="flex items-center gap-3">
-              <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-xs font-black text-white dark:bg-white dark:text-black"
-                >2</span
-              >
-              <span>Scroll and tap <strong>Add to Home Screen</strong>.</span>
-            </li>
-            <li class="flex items-center gap-3">
-              <span
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-xs font-black text-white dark:bg-white dark:text-black"
-                >3</span
-              >
-              <span>Tap <strong>Add</strong> in the top corner.</span>
-            </li>
-          </ol>
+          <AlertMessage type="error" :message="deleteAccountErrorMessage" />
 
-          <button
-            class="btn-press mt-2 flex h-12 w-full items-center justify-center rounded-full bg-zinc-950 px-6 py-3 font-bold text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-            @click="showIosModal = false"
-          >
-            Got it
-          </button>
+          <form class="flex flex-col gap-3" @submit.prevent="confirmDeleteAccount">
+            <input
+              v-model="deleteAccountConfirmation"
+              type="text"
+              :placeholder="DELETE_ACCOUNT_CONFIRMATION_TEXT"
+              autocomplete="off"
+              class="w-full rounded-full border border-zinc-200 bg-zinc-50 px-4 py-3 text-zinc-950 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-950 dark:border-zinc-800 dark:bg-black dark:text-white dark:placeholder:text-zinc-600 dark:focus:border-white"
+            />
+
+            <button
+              type="submit"
+              :disabled="isDeletingAccount || !canConfirmDeleteAccount"
+              class="btn-press mt-2 flex h-12 w-full items-center justify-center rounded-full bg-red-600 px-6 py-3 font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-70 dark:bg-red-500 dark:hover:bg-red-400"
+            >
+              <LoadingSpinner v-if="isDeletingAccount" size="h-5 w-5" color="text-current" />
+              <span v-else>Delete Account</span>
+            </button>
+          </form>
         </div>
       </div>
     </Transition>
   </Teleport>
+
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 
+import { RECOMMENDATION_LIMIT } from '../constants'
+import { LEGAL_PAGE_LINKS } from '~/constants/legal'
 import { THEME_DARK_VALUE, THEME_LIGHT_VALUE, THEME_STORAGE_KEY } from '~/utils/theme'
 
-const { user, logout, updatePassword, setCurrentUser } = useAuth()
+const { user, session, logout, updatePassword, setCurrentUser, resetClientState } = useAuth()
 const supabase = useSupabase()
 const mode = useColorMode({
   initialValue: THEME_DARK_VALUE,
   storageKey: THEME_STORAGE_KEY,
 })
 const { quota, pending: quotaPending, error: quotaError, fetchQuota } = useRecommendationQuota()
-const { showInstallOption, showIosModal, install } = usePwaInstall()
+const { showInstallOption, openInstallModal } = usePwaInstall()
 
 const CURRENT_PASSWORD_ERROR_PATTERNS = [
   'current password',
@@ -443,6 +487,10 @@ const CURRENT_PASSWORD_ERROR_PATTERNS = [
 ]
 const MIN_PASSWORD_LENGTH = 6
 const MAX_NAME_LENGTH = 25
+const DELETE_ACCOUNT_ROUTE = '/api/account/delete'
+const DELETE_ACCOUNT_REDIRECT_PATH = '/profile?auth=login'
+const DELETE_ACCOUNT_CONFIRMATION_TEXT = 'delete account'
+const DELETE_ACCOUNT_ERROR_MESSAGE = 'Unable to delete account.'
 const activeThemeClass = 'bg-zinc-950 text-white dark:bg-white dark:text-black'
 const inactiveThemeClass = 'text-zinc-500 hover:text-zinc-950 dark:hover:text-white'
 const comingSoonSettings = [
@@ -461,6 +509,10 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const passwordErrorMessage = ref('')
 const isSavingPassword = ref(false)
+const isDeleteAccountModalOpen = ref(false)
+const deleteAccountConfirmation = ref('')
+const deleteAccountErrorMessage = ref('')
+const isDeletingAccount = ref(false)
 
 const displayName = computed(
   () => user.value?.user_metadata?.username || user.value?.user_metadata?.full_name || 'User'
@@ -469,12 +521,15 @@ const profileInitial = computed(() => displayName.value.trim().charAt(0) || 'U')
 const isDarkMode = computed(() => mode.value === THEME_DARK_VALUE)
 const darkThemeValue = THEME_DARK_VALUE
 const lightThemeValue = THEME_LIGHT_VALUE
+const canConfirmDeleteAccount = computed(
+  () => deleteAccountConfirmation.value.trim().toLowerCase() === DELETE_ACCOUNT_CONFIRMATION_TEXT
+)
 const quotaUsedPercent = computed(() => {
-  if (quota.value.limit <= 0) {
+  if (RECOMMENDATION_LIMIT <= 0) {
     return 0
   }
 
-  return Math.round(((quota.value.limit - quota.value.remaining) / quota.value.limit) * 100)
+  return Math.round(((RECOMMENDATION_LIMIT - quota.value.remaining) / RECOMMENDATION_LIMIT) * 100)
 })
 const quotaProgressWidth = computed(() => `${Math.min(100, Math.max(0, quotaUsedPercent.value))}%`)
 
@@ -539,6 +594,22 @@ const getErrorMessage = (error) => {
   return error instanceof Error ? error.message : 'Something went wrong.'
 }
 
+const getDeleteAccountErrorMessage = (error) => {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'data' in error &&
+    typeof error.data === 'object' &&
+    error.data !== null &&
+    'statusMessage' in error.data &&
+    typeof error.data.statusMessage === 'string'
+  ) {
+    return error.data.statusMessage
+  }
+
+  return error instanceof Error ? error.message : DELETE_ACCOUNT_ERROR_MESSAGE
+}
+
 const resetPasswordForm = () => {
   currentPassword.value = ''
   newPassword.value = ''
@@ -556,6 +627,23 @@ const closePasswordModal = () => {
 
   isPasswordModalOpen.value = false
   resetPasswordForm()
+}
+
+const resetDeleteAccountForm = () => {
+  deleteAccountConfirmation.value = ''
+  deleteAccountErrorMessage.value = ''
+}
+
+const openDeleteAccountModal = () => {
+  resetDeleteAccountForm()
+  isDeleteAccountModalOpen.value = true
+}
+
+const closeDeleteAccountModal = () => {
+  if (isDeletingAccount.value) return
+
+  isDeleteAccountModalOpen.value = false
+  resetDeleteAccountForm()
 }
 
 const validatePasswords = () => {
@@ -601,6 +689,41 @@ const savePassword = async () => {
     passwordErrorMessage.value = getErrorMessage(error)
   } finally {
     isSavingPassword.value = false
+  }
+}
+
+const confirmDeleteAccount = async () => {
+  if (!canConfirmDeleteAccount.value) {
+    deleteAccountErrorMessage.value = `Type "${DELETE_ACCOUNT_CONFIRMATION_TEXT}" to continue.`
+    return
+  }
+
+  const accessToken = session.value?.access_token
+
+  if (!accessToken) {
+    deleteAccountErrorMessage.value = 'You need to be signed in to delete your account.'
+    return
+  }
+
+  deleteAccountErrorMessage.value = ''
+  isDeletingAccount.value = true
+
+  try {
+    await $fetch(DELETE_ACCOUNT_ROUTE, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    })
+
+    await supabase.auth.signOut({ scope: 'local' })
+    resetClientState()
+    isDeleteAccountModalOpen.value = false
+    await navigateTo(DELETE_ACCOUNT_REDIRECT_PATH)
+  } catch (error) {
+    deleteAccountErrorMessage.value = getDeleteAccountErrorMessage(error)
+  } finally {
+    isDeletingAccount.value = false
   }
 }
 </script>

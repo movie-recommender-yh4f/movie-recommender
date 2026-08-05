@@ -1,10 +1,10 @@
+import { RECOMMENDATION_LIMIT } from '../constants'
+
 export interface RecommendationQuota {
   limit: number
   remaining: number
   reset: number
 }
-
-const DEFAULT_RECOMMENDATION_LIMIT = 20
 
 function isRecommendationQuota(value: unknown): value is RecommendationQuota {
   if (!value || typeof value !== 'object') {
@@ -24,8 +24,8 @@ export function useRecommendationQuota() {
   const supabase = useSupabase()
   const { completed } = useOnboarding()
   const quota = useState<RecommendationQuota>('recommendation-quota', () => ({
-    limit: DEFAULT_RECOMMENDATION_LIMIT,
-    remaining: DEFAULT_RECOMMENDATION_LIMIT,
+    limit: RECOMMENDATION_LIMIT,
+    remaining: RECOMMENDATION_LIMIT,
     reset: 0,
   }))
   const pending = useState('recommendation-quota-pending', () => false)
@@ -42,8 +42,8 @@ export function useRecommendationQuota() {
 
       if (!session?.access_token) {
         quota.value = {
-          limit: DEFAULT_RECOMMENDATION_LIMIT,
-          remaining: DEFAULT_RECOMMENDATION_LIMIT,
+          limit: RECOMMENDATION_LIMIT,
+          remaining: RECOMMENDATION_LIMIT,
           reset: 0,
         }
         return
@@ -51,8 +51,8 @@ export function useRecommendationQuota() {
 
       if (completed.value !== true) {
         quota.value = {
-          limit: DEFAULT_RECOMMENDATION_LIMIT,
-          remaining: DEFAULT_RECOMMENDATION_LIMIT,
+          limit: RECOMMENDATION_LIMIT,
+          remaining: RECOMMENDATION_LIMIT,
           reset: 0,
         }
         return

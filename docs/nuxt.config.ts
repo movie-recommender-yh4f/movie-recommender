@@ -3,6 +3,12 @@ export default defineNuxtConfig({
     "@nuxt/content",
     process.env.NODE_ENV === "development" ? "nuxt-studio" : [],
   ].filter(Boolean),
+  css: ["~/assets/css/main.css"],
+  routeRules: {
+    "/**": {
+      ogImage: false,
+    },
+  },
   studio: {
     route: "/_studio",
   },
@@ -33,5 +39,16 @@ export default defineNuxtConfig({
   assistant: {
     floatingInput: false,
     explainWithAi: false,
+  },
+  app: {
+    head: {
+      link: [
+        {
+          rel: "icon",
+          type: "image/svg+xml",
+          href: "/favicon.svg?v=2",
+        },
+      ],
+    },
   },
 });

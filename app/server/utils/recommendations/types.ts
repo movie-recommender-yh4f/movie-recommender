@@ -58,14 +58,12 @@ export interface InitialModelRecommendation {
   index: number
   title: string
   release_year: number | null
-  short_reason: string
 }
 
 export interface ReplacementModelRecommendation {
   replaced_index: number
   title: string
   release_year: number | null
-  short_reason: string
 }
 
 export interface ValidationBatchResult {

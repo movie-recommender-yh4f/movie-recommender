@@ -1,5 +1,14 @@
 import { computed, ref } from 'vue'
 
+const IOS_PHONE_USER_AGENT_PATTERN = /iphone|ipod/i
+const ANDROID_MOBILE_USER_AGENT_PATTERN = /android/i
+const MOBILE_USER_AGENT_HINT = 'mobile'
+const TRUE_STORAGE_VALUE = 'true'
+const INSTALL_PROMPT_DISMISSED_STORAGE_KEY = 'pwa-install-prompt-dismissed'
+const INSTALL_MODAL_OPEN_STATE_KEY = 'pwa-install-modal-open'
+const IOS_INSTALL_MODAL_OPEN_STATE_KEY = 'pwa-ios-install-modal-open'
+const INSTALL_PROMPT_DISMISSED_STATE_KEY = 'pwa-install-prompt-dismissed-state'
+
 export interface BeforeInstallPromptEvent extends Event {
   readonly platforms: string[]
   readonly userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
@@ -19,7 +28,21 @@ function detectIos(): boolean {
   return isIosDevice || isIpadOs
 }
 
-function detectStandalone(): boolean {
+export function detectMobilePwaDevice(): boolean {
+  if (!import.meta.client) {
+    return false
+  }
+
+  const userAgent = navigator.userAgent || ''
+  const isIosPhone = IOS_PHONE_USER_AGENT_PATTERN.test(userAgent)
+  const isAndroidMobile =
+    ANDROID_MOBILE_USER_AGENT_PATTERN.test(userAgent) &&
+    userAgent.toLowerCase().includes(MOBILE_USER_AGENT_HINT)
+
+  return isIosPhone || isAndroidMobile
+}
+
+export function detectStandalone(): boolean {
   if (!import.meta.client) {
     return false
   }
@@ -32,24 +55,99 @@ function detectStandalone(): boolean {
   return matchesStandalone || iosStandalone
 }
 
-export function usePwaInstall() {
-  const deferredPrompt = useState<BeforeInstallPromptEvent | null>('pwa-install-prompt', () => null)
-  const showIosModal = ref(false)
+function readPersistedInstallPromptDismissed(): boolean {
+  if (!import.meta.client) {
+    return false
+  }
 
-  const isIos = computed(detectIos)
-  const isStandalone = computed(detectStandalone)
-  const canInstall = computed(() => Boolean(deferredPrompt.value) && !isStandalone.value)
-  const showInstallOption = computed(
-    () => (canInstall.value || isIos.value) && !isStandalone.value
-  )
+  try {
+    return window.localStorage.getItem(INSTALL_PROMPT_DISMISSED_STORAGE_KEY) === TRUE_STORAGE_VALUE
+  } catch {
+    return false
+  }
+}
 
-  async function install() {
-    if (isStandalone.value) {
+function persistInstallPromptDismissed(isDismissed: boolean) {
+  if (!import.meta.client) {
+    return
+  }
+
+  try {
+    if (isDismissed) {
+      window.localStorage.setItem(INSTALL_PROMPT_DISMISSED_STORAGE_KEY, TRUE_STORAGE_VALUE)
       return
     }
 
+    window.localStorage.removeItem(INSTALL_PROMPT_DISMISSED_STORAGE_KEY)
+  } catch {}
+}
+
+export function usePwaInstall() {
+  const deferredPrompt = useState<BeforeInstallPromptEvent | null>('pwa-install-prompt', () => null)
+  const isInstallModalOpen = useState<boolean>(INSTALL_MODAL_OPEN_STATE_KEY, () => false)
+  const isIosInstallModalOpen = useState<boolean>(IOS_INSTALL_MODAL_OPEN_STATE_KEY, () => false)
+  const isInstallPromptDismissed = useState<boolean>(INSTALL_PROMPT_DISMISSED_STATE_KEY, () => false)
+  const showIosModal = ref(false)
+
+  const isIos = computed(detectIos)
+  const isMobileDevice = computed(detectMobilePwaDevice)
+  const isStandalone = computed(detectStandalone)
+  const canInstall = computed(
+    () => Boolean(deferredPrompt.value) && isMobileDevice.value && !isStandalone.value
+  )
+  const canAutoPromptInstall = computed(
+    () => isMobileDevice.value && !isStandalone.value && (isIos.value || canInstall.value)
+  )
+  const showInstallOption = computed(
+    () => (canInstall.value || (isIos.value && isMobileDevice.value)) && !isStandalone.value
+  )
+
+  function syncInstallPromptDismissedState() {
+    isInstallPromptDismissed.value = readPersistedInstallPromptDismissed()
+  }
+
+  function markInstallPromptDismissed() {
+    isInstallPromptDismissed.value = true
+    persistInstallPromptDismissed(true)
+  }
+
+  function maybeAutoOpenInstallModal() {
+    syncInstallPromptDismissedState()
+
+    if (!canAutoPromptInstall.value || isInstallPromptDismissed.value) {
+      return
+    }
+
+    isInstallModalOpen.value = true
+  }
+
+  function openInstallModal() {
+    if (!canAutoPromptInstall.value) {
+      return
+    }
+
+    isInstallModalOpen.value = true
+  }
+
+  function dismissInstallModal() {
+    isInstallModalOpen.value = false
+    markInstallPromptDismissed()
+  }
+
+  function closeIosInstallModal() {
+    isIosInstallModalOpen.value = false
+  }
+
+  async function install() {
+    if (isStandalone.value || !isMobileDevice.value) {
+      return
+    }
+
+    markInstallPromptDismissed()
+    isInstallModalOpen.value = false
+
     if (isIos.value) {
-      showIosModal.value = true
+      isIosInstallModalOpen.value = true
       return
     }
 
@@ -68,12 +166,30 @@ export function usePwaInstall() {
     }
   }
 
+  function handleAppInstalled() {
+    deferredPrompt.value = null
+    isInstallModalOpen.value = false
+    isIosInstallModalOpen.value = false
+    showIosModal.value = false
+    markInstallPromptDismissed()
+  }
+
   return {
     isIos,
+    isMobileDevice,
     isStandalone,
     canInstall,
+    canAutoPromptInstall,
+    isInstallModalOpen,
+    isIosInstallModalOpen,
+    maybeAutoOpenInstallModal,
+    openInstallModal,
+    dismissInstallModal,
+    closeIosInstallModal,
+    handleAppInstalled,
     showInstallOption,
     showIosModal,
+    syncInstallPromptDismissedState,
     install,
   }
 }

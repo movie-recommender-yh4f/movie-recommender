@@ -9,6 +9,14 @@ import type {
 import { fetchMovieListMetadata } from '~/composables/useMovieListMetadata'
 
 const PENDING_MY_LIST_STORAGE_KEY = 'movie-recommender-pending-my-list'
+const MY_LIST_LOADED_STATE_KEY = 'my-list-loaded'
+
+interface MyListSyncOptions {
+  accessToken?: string
+  force?: boolean
+}
+
+let myListSyncRequest: Promise<void> | null = null
 
 const isPendingMyListMovie = (movie: unknown): movie is PendingMyListMovie => {
   if (!movie || typeof movie !== 'object') {
@@ -75,33 +83,62 @@ export const useMyList = () => {
   const myList = useState<MyListMovie[]>('my-list', () => [])
   const watchedMovies = useState<WatchedMovie[]>('watched', () => [])
   const pendingMyListMovies = useState<PendingMyListMovie[]>('pending-my-list', () => [])
+  const hasLoadedMyList = useState<boolean>(MY_LIST_LOADED_STATE_KEY, () => false)
 
   const { load: loadPendingMyListFromStorage, persist: persistPendingMyListToStorage } =
     usePendingStorage(PENDING_MY_LIST_STORAGE_KEY, pendingMyListMovies, isPendingMyListMovie)
 
-  const clearMyList = () => {
-    myList.value = []
+  const normalizeSyncOptions = (options?: string | MyListSyncOptions): MyListSyncOptions => {
+    if (typeof options === 'string') {
+      return { accessToken: options }
+    }
+
+    return options ?? {}
   }
 
-  const syncMyListFromSupabase = async (accessToken?: string) => {
-    try {
-      const token = await resolveAccessToken(supabase, accessToken)
+  const clearMyList = () => {
+    myList.value = []
+    hasLoadedMyList.value = false
+    myListSyncRequest = null
+  }
 
-      if (!token) {
-        myList.value = []
-        return
+  const syncMyListFromSupabase = async (options?: string | MyListSyncOptions) => {
+    const { accessToken, force = false } = normalizeSyncOptions(options)
+
+    if (!force && hasLoadedMyList.value) {
+      return
+    }
+
+    if (myListSyncRequest) {
+      return myListSyncRequest
+    }
+
+    myListSyncRequest = (async () => {
+      try {
+        const token = await resolveAccessToken(supabase, accessToken)
+
+        if (!token) {
+          clearMyList()
+          return
+        }
+
+        const response = await $fetch<{ success: boolean; tmdbIds: number[] }>('/api/mylist', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+
+        const metadata = await fetchMovieListMetadata(token, response.tmdbIds)
+        myList.value = mergeMyListMetadata(myList.value, metadata)
+        hasLoadedMyList.value = true
+      } catch {}
+      finally {
+        myListSyncRequest = null
       }
+    })()
 
-      const response = await $fetch<{ success: boolean; tmdbIds: number[] }>('/api/mylist', {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      const metadata = await fetchMovieListMetadata(token, response.tmdbIds)
-      myList.value = mergeMyListMetadata(myList.value, metadata)
-    } catch {}
+    return myListSyncRequest
   }
 
   const addToMyList = async (
@@ -199,7 +236,7 @@ export const useMyList = () => {
         body: { tmdbId },
       })
     } catch {
-      await syncMyListFromSupabase()
+      await syncMyListFromSupabase({ force: true })
       return 'error'
     }
 

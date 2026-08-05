@@ -1,5 +1,5 @@
 import type { H3Event } from 'h3'
-import { getInitialRecommendationCount } from './constants'
+import { INITIAL_RECOMMENDATION_COUNT } from './constants'
 import type { Recommendation, RecommendationWithId } from './types'
 import { fetchTmdb } from '../tmdb/client'
 import { searchMoviesBatch } from '../tmdb/search-movies'
@@ -157,7 +157,7 @@ export async function appendTmdbIds(
   recommendations: Recommendation[],
   event?: H3Event
 ): Promise<{ recommendations: RecommendationWithId[]; tmdbFallbackCount: number }> {
-  const limited = recommendations.slice(0, getInitialRecommendationCount())
+  const limited = recommendations.slice(0, INITIAL_RECOMMENDATION_COUNT)
 
   const allCandidates = limited.flatMap((recommendation) =>
     getSearchCandidates(recommendation).map((query) => ({

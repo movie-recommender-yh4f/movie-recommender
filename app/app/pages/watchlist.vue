@@ -47,7 +47,14 @@
         />
 
         <div
-          v-if="!hasMovies"
+          v-if="isInitialLoadPending"
+          class="flex min-h-[24rem] items-center justify-center rounded-[1.75rem] border border-outline-variant bg-surface-container-low px-6 py-14 shadow-glow"
+        >
+          <FilmReelLoader :label="INITIAL_WATCHLIST_LOADING_LABEL" />
+        </div>
+
+        <div
+          v-else-if="!hasMovies"
           class="rounded-[1.75rem] border border-dashed border-outline-variant bg-surface-container-low px-6 py-14 text-center shadow-glow"
         >
           <p class="text-2xl font-semibold text-on-background">Your watchlist is empty</p>
@@ -107,6 +114,7 @@ import { useVirtualGrid } from '~/composables/useVirtualGrid'
 import type { Movie, MyListMovie } from '~/types/movie'
 
 const UNDO_TIMEOUT_MS = 5000
+const INITIAL_WATCHLIST_LOADING_LABEL = 'Loading your watchlist...'
 const DEFAULT_METADATA_PROGRESS = { loaded: 0, total: 0 }
 const GRID_CARD_ASPECT_RATIO = 2 / 3
 const GRID_CARD_BODY_HEIGHT = 136
@@ -114,9 +122,10 @@ const GRID_COLUMN_GAP = { compact: 16, regular: 24 }
 const GRID_ROW_GAP = { compact: 32, regular: 40 }
 const GRID_OVERSCAN = 12
 
-const { myList, removeFromMyList, addToMyList } = useMyList()
+const { myList, removeFromMyList, addToMyList, syncMyListFromSupabase } = useMyList()
 const { markAsWatched, removeFromWatched } = useWatchedMovies()
 const { getMovieDetails: fetchMovieDetails } = useMovieDetails()
+const { isInitialLoadPending, runInitialLoad } = useInitialPageLoad()
 const {
   searchQuery,
   selectedGenres,
@@ -168,6 +177,12 @@ const isLoadingMetadata = computed(() => false)
 const metadataProgress = computed(() => DEFAULT_METADATA_PROGRESS)
 
 let undoTimer: ReturnType<typeof setTimeout> | null = null
+
+onMounted(() => {
+  void runInitialLoad(async () => {
+    await syncMyListFromSupabase()
+  })
+})
 
 const dismissUndo = () => {
   if (undoTimer) {

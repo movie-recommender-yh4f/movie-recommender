@@ -1,5 +1,6 @@
 import type { MovieListMetadata } from '~/types/movie'
 import { getAuthorizedUser } from '../../utils/auth/authorize-user'
+import { requireCompletedOnboarding } from '../../utils/auth/onboarding'
 import { filterMetadataLimiter } from '../../utils/movies/filter-metadata-rate-limit'
 import { throwSupabaseError } from '../../utils/shared/api-error'
 
@@ -69,6 +70,7 @@ function toMovieListMetadata(row: MovieRow): MovieListMetadata {
 
 export default defineEventHandler(async (event) => {
   const { supabase, user } = await getAuthorizedUser(event)
+  await requireCompletedOnboarding(event, supabase, user.id)
   const { success } = await filterMetadataLimiter.limit(user.id)
 
   if (!success) {

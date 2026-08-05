@@ -26,6 +26,9 @@ import { logPrivateError, logPrivateInfo, throwSupabaseError } from '../utils/sh
 const RECOMMENDATIONS_TABLE = 'recommendations'
 const TTL_MS = 7 * 24 * 60 * 60 * 1000
 const QUERY_TRUE = ['true', '1']
+const SESSION_RECOMMENDED_TMDB_IDS_QUERY = 'sessionRecommendedTmdbIds'
+const TMDB_ID_DELIMITER = ','
+const MIN_TMDB_ID = 1
 const LOAD_RECOMMENDATIONS_MESSAGE = 'Unable to load recommendations right now.'
 const SAVE_RECOMMENDATIONS_MESSAGE = 'Unable to save recommendations right now.'
 
@@ -98,15 +101,39 @@ function dedupeRecommendationIds(recommendationIds: number[]): number[] {
   return dedupedIds
 }
 
+function parseRecommendedTmdbIds(value: unknown): number[] {
+  const rawValues =
+    typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+
+  if (rawValues.length === 0) {
+    return []
+  }
+
+  const ids: number[] = []
+
+  for (const rawValue of rawValues) {
+    for (const entry of rawValue.split(TMDB_ID_DELIMITER)) {
+      const parsedId = Number(entry)
+      if (!Number.isInteger(parsedId) || parsedId < MIN_TMDB_ID) {
+        continue
+      }
+
+      ids.push(parsedId)
+    }
+  }
+
+  return dedupeRecommendationIds(ids)
+}
+
 function filterFinalRecommendations(
   recommendations: RecommendationWithId[],
   watchedMovies: WatchedMovieRecord[],
   myListMovies: WatchedMovieRecord[],
-  excludedMovies: RecommendationWithId[]
+  excludedTmdbIds: number[]
 ): FilteredRecommendationsResult {
   const watchedIds = new Set(watchedMovies.map((movie) => movie.tmdbId))
   const myListIds = new Set(myListMovies.map((movie) => movie.tmdbId))
-  const excludedIds = new Set(toRecommendationIds(excludedMovies))
+  const excludedIds = new Set(excludedTmdbIds)
   const seenIds = new Set<number>()
   const nonMyListRecommendations: RecommendationWithId[] = []
   const myListRecommendations: RecommendationWithId[] = []
@@ -207,28 +234,6 @@ function getErrorStatusMessage(error: unknown): string {
   return 'Unable to generate recommendations right now.'
 }
 
-const RECOMMENDATION_TIMING_SOURCE = 'ai_provider' as const
-
-function logRecommendationTiming(
-  event: H3Event,
-  userId: string,
-  action: string,
-  startedAt: number
-): void {
-  logPrivateInfo({
-    event: 'recommendation.timing',
-    source: RECOMMENDATION_TIMING_SOURCE,
-    statusCode: 200,
-    userId,
-    route: event.path,
-    method: event.method,
-    extra: {
-      action,
-      durationMs: performance.now() - startedAt,
-    },
-  })
-}
-
 function buildRegenerationFallbackResponse(
   error: unknown,
   staleRecommendationIds: number[]
@@ -326,23 +331,15 @@ async function storeCachedRecommendations(
 }
 
 export default defineEventHandler(async (event) => {
-  const requestStartedAt = performance.now()
-  const authorizationStartedAt = performance.now()
   const { supabase, user } = await getAuthorizedUser(event)
-  logRecommendationTiming(event, user.id, 'authorize_user', authorizationStartedAt)
-
-  const onboardingStartedAt = performance.now()
   await requireCompletedOnboarding(event, supabase, user.id)
-  logRecommendationTiming(event, user.id, 'check_onboarding', onboardingStartedAt)
-
-  const { getNew, refresh } = getQuery(event)
+  const { getNew, refresh, [SESSION_RECOMMENDED_TMDB_IDS_QUERY]: sessionRecommendedTmdbIds } =
+    getQuery(event)
   const isGetNew = isQueryFlagEnabled(getNew)
   const isRefresh = !isGetNew && isQueryFlagEnabled(refresh)
 
   const redis = createRedisClient()
-  const lockStartedAt = performance.now()
   const lock = await acquireRecommendationLock(redis, user.id)
-  logRecommendationTiming(event, user.id, 'acquire_lock', lockStartedAt)
 
   if (!lock) {
     throw createError({
@@ -352,10 +349,8 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const watchedMoviesStartedAt = performance.now()
     const watchedMovies = await fetchWatchedMovies(supabase, user.id, { event })
-    logRecommendationTiming(event, user.id, 'fetch_watched_movies', watchedMoviesStartedAt)
-    let excludedMovies: RecommendationWithId[] = []
+    let promptExcludedMovies: RecommendationWithId[] = []
 
     if (watchedMovies.length === 0) {
       throw createError({
@@ -364,54 +359,48 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    const watchedHashStartedAt = performance.now()
     const watchedHash = computeWatchedHash(watchedMovies)
-    logRecommendationTiming(event, user.id, 'compute_watched_hash', watchedHashStartedAt)
-
-    const cacheStateStartedAt = performance.now()
     const cacheState = await getRecommendationCacheState(event, supabase, user.id, watchedHash)
-    logRecommendationTiming(event, user.id, 'load_recommendation_cache', cacheStateStartedAt)
+    const sessionExcludedRecommendationIds = isGetNew
+      ? parseRecommendedTmdbIds(sessionRecommendedTmdbIds)
+      : []
+    const promptExcludedRecommendationIds = isGetNew ? cacheState.storedRecommendationIds : []
+    const validationExcludedRecommendationIds = dedupeRecommendationIds([
+      ...cacheState.storedRecommendationIds,
+      ...sessionExcludedRecommendationIds,
+    ])
 
     if (!isGetNew && !isRefresh && cacheState.freshRecommendationIds) {
-      logRecommendationTiming(event, user.id, 'return_fresh_cache', requestStartedAt)
       return buildSuccessResponse(cacheState.freshRecommendationIds, true)
     }
 
-    const myListMoviesStartedAt = performance.now()
     const myListMovies = await fetchMyListMovies(supabase, user.id, { event })
-    logRecommendationTiming(event, user.id, 'fetch_my_list_movies', myListMoviesStartedAt)
 
-    if (isGetNew && cacheState.storedRecommendationIds.length > 0) {
-      const excludedMoviesStartedAt = performance.now()
-      excludedMovies = await hydrateRecommendationsByTmdbIds(
+    if (promptExcludedRecommendationIds.length > 0) {
+      promptExcludedMovies = await hydrateRecommendationsByTmdbIds(
         supabase,
-        cacheState.storedRecommendationIds,
+        promptExcludedRecommendationIds,
         { event, userId: user.id }
       )
-      logRecommendationTiming(event, user.id, 'hydrate_excluded_recommendations', excludedMoviesStartedAt)
     }
 
     let recommendations: RecommendationWithId[]
     try {
-      const platformAiStartedAt = performance.now()
       const platformAiResult = await getRecommendationsFromPlatformAi(
         watchedMovies,
         myListMovies,
         user.id,
         event,
-        excludedMovies
+        promptExcludedMovies,
+        validationExcludedRecommendationIds
       )
-      logRecommendationTiming(event, user.id, 'load_from_platform_ai', platformAiStartedAt)
       const generatedRecommendations = platformAiResult.recommendations
-
-      const filteringStartedAt = performance.now()
       const filteredResult = filterFinalRecommendations(
         generatedRecommendations,
         watchedMovies,
         myListMovies,
-        excludedMovies
+        validationExcludedRecommendationIds
       )
-      logRecommendationTiming(event, user.id, 'filter_final_recommendations', filteringStartedAt)
       recommendations = filteredResult.recommendations
 
       logPrivateInfo({
@@ -434,13 +423,11 @@ export default defineEventHandler(async (event) => {
         throw createInsufficientRecommendationsError()
       }
     } catch (error) {
-      if (cacheState.storedRecommendationIds.length === 0) {
-        throw error
-      }
-
       logPrivateError({
         cause: error,
-        event: 'recommendation.regeneration_failed',
+        event: cacheState.storedRecommendationIds.length === 0
+          ? 'recommendation.generation_failed'
+          : 'recommendation.regeneration_failed',
         source: 'ai_provider',
         statusCode: getErrorStatusCode(error),
         userId: user.id,
@@ -450,19 +437,22 @@ export default defineEventHandler(async (event) => {
           staleRecommendationCount: cacheState.storedRecommendationIds.length,
           refresh: isRefresh,
           getNew: isGetNew,
+          hasStaleFallback: cacheState.storedRecommendationIds.length > 0,
+          errorStatusMessage: getErrorStatusMessage(error),
         },
       })
+
+      if (cacheState.storedRecommendationIds.length === 0) {
+        throw error
+      }
 
       return buildRegenerationFallbackResponse(error, cacheState.storedRecommendationIds)
     }
 
-    const storeRecommendationsStartedAt = performance.now()
     await storeCachedRecommendations(event, supabase, user.id, recommendations, watchedHash)
-    logRecommendationTiming(event, user.id, 'store_recommendations', storeRecommendationsStartedAt)
 
     return buildSuccessResponse(toRecommendationIds(recommendations), false)
   } finally {
-    logRecommendationTiming(event, user.id, 'total_request', requestStartedAt)
     await releaseRecommendationLock(redis, lock)
   }
 })

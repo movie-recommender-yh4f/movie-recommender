@@ -1,6 +1,6 @@
-# Movie Recommender Docs
+# NextWatch Docs
 
-This directory contains the Docus site for the current Movie Recommender codebase.
+This directory contains the Docus site for the current NextWatch codebase.
 
 ## Commands
 

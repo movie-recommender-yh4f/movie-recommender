@@ -105,7 +105,8 @@
 
       <div
         v-else
-        class="flex min-h-0 flex-1 items-center justify-center [--card-non-poster-height:clamp(9.25rem,19dvh,12rem)] [--fit-safety:clamp(0.85rem,2dvh,1.5rem)] [--footer-clearance:clamp(0.65rem,1.75dvh,1.25rem)] [--footer-height:4rem] [--header-height:4rem] [--height-fit-width:calc((100dvh-var(--header-height)-var(--footer-height)-var(--page-vertical-padding)-var(--footer-clearance)-var(--card-non-poster-height)-var(--fit-safety))/1.5)] [--page-vertical-padding:1.5rem] sm:[--footer-height:4.25rem] sm:[--page-vertical-padding:2rem] max-[760px]:[--card-non-poster-height:clamp(7.85rem,17dvh,9.75rem)] max-[760px]:[--fit-safety:clamp(0.65rem,1.5dvh,1rem)] max-[760px]:[--footer-clearance:clamp(0.5rem,1.4dvh,0.85rem)] max-[680px]:[--card-non-poster-height:clamp(7rem,16dvh,8.65rem)] max-[680px]:[--fit-safety:0.65rem] max-[680px]:[--footer-clearance:0.5rem]"
+        :style="recommendationViewportStyle"
+        class="flex min-h-0 flex-1 items-center justify-center [--card-non-poster-height:clamp(9.25rem,calc(var(--app-dvh)*19),12rem)] [--fit-safety:clamp(0.85rem,calc(var(--app-dvh)*2),1.5rem)] [--footer-clearance:clamp(0.65rem,calc(var(--app-dvh)*1.75),1.25rem)] [--footer-height:4rem] [--header-height:4rem] [--height-fit-width:calc((var(--recommendation-viewport-height)-var(--header-height)-var(--footer-height)-var(--page-vertical-padding)-var(--footer-clearance)-var(--card-non-poster-height)-var(--fit-safety))/1.5)] [--page-vertical-padding:1.5rem] sm:[--footer-height:4.25rem] sm:[--page-vertical-padding:2rem] max-[760px]:[--card-non-poster-height:clamp(7.85rem,calc(var(--app-dvh)*17),9.75rem)] max-[760px]:[--fit-safety:clamp(0.65rem,calc(var(--app-dvh)*1.5),1rem)] max-[760px]:[--footer-clearance:clamp(0.5rem,calc(var(--app-dvh)*1.4),0.85rem)] max-[680px]:[--card-non-poster-height:clamp(7rem,calc(var(--app-dvh)*16),8.65rem)] max-[680px]:[--fit-safety:0.65rem] max-[680px]:[--footer-clearance:0.5rem]"
       >
         <div
           v-if="detailsPending"
@@ -201,8 +202,43 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { Movie } from '~/types/movie'
+import { APP_HEIGHT_CSS_VALUE } from '~/composables/useStableViewportHeight'
+
+interface RecommendationItem {
+  tmdbId: number
+}
+
+interface RecommendationRegenerationError {
+  statusCode: number
+  statusMessage: string
+  retryable: boolean
+}
+
+interface RecommendationApiResponse {
+  recommendations: unknown
+  regenerationError: RecommendationRegenerationError | null
+  staleRecommendations: unknown
+}
+
+interface RecommendationFailure {
+  statusCode: number
+  statusMessage: string
+  retryable: boolean
+  staleRecommendations: RecommendationItem[] | null
+  staleApplied: boolean
+}
+
+interface MovieToSave {
+  id: number
+  title: string
+  year: number
+  poster: string
+  genres?: string[]
+  runtime?: number | null
+}
 
 const RECOMMENDATION_REFRESH_EVENT = 'recommendation:refresh-request'
 const DESKTOP_DETAILS_BREAKPOINT_QUERY = '(min-width: 1024px)'
@@ -210,46 +246,69 @@ const FETCH_MODE = {
   DEFAULT: 'default',
   GET_NEW: 'getNew',
   REFRESH: 'refresh',
-}
+} as const
+const RECOMMENDATION_QUERY = {
+  GET_NEW: 'getNew',
+  REFRESH: 'refresh',
+  SESSION_RECOMMENDED_TMDB_IDS: 'sessionRecommendedTmdbIds',
+} as const
+
+type FetchMode = (typeof FETCH_MODE)[keyof typeof FETCH_MODE]
 
 const RETRY_COOLDOWN_S = 30
 const RETRY_COOLDOWN_KEY = 'retry-cooldown-expires'
 const FALLBACK_RECOMMENDATION_ERROR_MESSAGE = 'Recommendations are unavailable right now.'
 const MAX_POSTER_STACK_CARDS = 2
+// to avoid showing the empty state for a brief moment while the auth state is still initializing
+const UNAUTHENTICATED_FALLBACK_DELAY_MS = 150
 
-const {
-  watchedMovies,
-  markAsWatched,
-  queuePendingWatchedMovie,
-  removePendingWatchedMovie,
-} = useWatchedMovies()
+const { watchedMovies, markAsWatched, queuePendingWatchedMovie, removePendingWatchedMovie } =
+  useWatchedMovies()
 const { myList, addToMyList } = useMyList()
 const { isAuthenticated, loading: authLoading, session } = useAuth()
+const { buildSessionRecommendationQueryValue, rememberSessionRecommendations } =
+  useRecommendationSession()
 const { completed: onboardingCompleted, hasResolved: onboardingResolved } = useOnboarding()
 const { getMovieDetails } = useMovieDetails()
 const supabase = useSupabase()
 
-const movies = useState('recommendation-movies', () => [])
-const originalMovies = useState('recommendation-original-movies', () => [])
-const hasLoaded = useState('recommendation-has-loaded', () => false)
-const hasSuccessfulRecommendationLoad = useState('has-successful-recommendation-load', () => false)
+const movies = useState<RecommendationItem[]>('recommendation-movies', () => [])
+const originalMovies = useState<RecommendationItem[]>('recommendation-original-movies', () => [])
+const hasLoaded = useState<boolean>('recommendation-has-loaded', () => false)
+const hasSuccessfulRecommendationLoad = useState<boolean>(
+  'has-successful-recommendation-load',
+  () => false
+)
 const recommendationsPending = ref(true)
 const detailsPending = ref(false)
 const pending = computed(() => recommendationsPending.value || detailsPending.value)
 const showLoginModal = ref(false)
-const recommendationFailure = ref(null)
-const lastFetchMode = ref(FETCH_MODE.DEFAULT)
-const pendingModalMovieId = ref(null)
-const currentMovieDetails = useState('recommendation-current-movie-details', () => null)
+const recommendationFailure = ref<RecommendationFailure | null>(null)
+const lastFetchMode = ref<FetchMode>(FETCH_MODE.DEFAULT)
+const pendingModalMovieId = ref<number | null>(null)
+const currentMovieDetails = useState<Movie | null>(
+  'recommendation-current-movie-details',
+  () => null
+)
 const detailsRequestId = ref(0)
 const retrySecondsLeft = ref(0)
 const isDesktopDetailsLayout = ref(false)
-let retryTimerHandle = null
-let recommendationRefreshHandler = null
-let desktopDetailsMediaQuery = null
+let retryTimerHandle: ReturnType<typeof setInterval> | null = null
+let recommendationRefreshHandler: (() => void) | null = null
+let desktopDetailsMediaQuery: MediaQueryList | null = null
 let isFetching = false
+let unauthenticatedFallbackTimeout: ReturnType<typeof setTimeout> | null = null
 
-function toRecommendationItems(recommendations) {
+const recommendationViewportStyle = computed(() => ({
+  '--app-dvh': `calc(${APP_HEIGHT_CSS_VALUE} / 100)`,
+  '--recommendation-viewport-height': APP_HEIGHT_CSS_VALUE,
+}))
+
+function toRecommendationItems(recommendations: unknown): RecommendationItem[] {
+  if (!Array.isArray(recommendations)) {
+    return []
+  }
+
   return recommendations.flatMap((recommendation) => {
     if (
       typeof recommendation === 'number' &&
@@ -262,11 +321,11 @@ function toRecommendationItems(recommendations) {
     if (
       recommendation &&
       typeof recommendation === 'object' &&
-      typeof recommendation.tmdbId === 'number' &&
-      Number.isInteger(recommendation.tmdbId) &&
-      recommendation.tmdbId > 0
+      typeof (recommendation as { tmdbId?: unknown }).tmdbId === 'number' &&
+      Number.isInteger((recommendation as { tmdbId: number }).tmdbId) &&
+      (recommendation as { tmdbId: number }).tmdbId > 0
     ) {
-      return [{ tmdbId: recommendation.tmdbId }]
+      return [{ tmdbId: (recommendation as { tmdbId: number }).tmdbId }]
     }
 
     return []
@@ -282,7 +341,7 @@ function clearRetryCooldown() {
   localStorage.removeItem(RETRY_COOLDOWN_KEY)
 }
 
-function resumeRetryCooldown(expiresAt) {
+function resumeRetryCooldown(expiresAt: number) {
   if (retryTimerHandle !== null) clearInterval(retryTimerHandle)
   const tick = () => {
     const secondsLeft = Math.ceil((expiresAt - Date.now()) / 1000)
@@ -302,13 +361,26 @@ function startRetryCooldown() {
   resumeRetryCooldown(expiresAt)
 }
 
-function getErrorStatusCode(error) {
-  return error?.statusCode ?? error?.status ?? error?.response?.status ?? 500
+function getErrorRecord(error: unknown): Record<string, unknown> | null {
+  return typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : null
 }
 
-function getErrorStatusMessage(error) {
-  const candidates = [error?.data?.statusMessage, error?.statusMessage, error?.message]
-  const message = candidates.find((candidate) => typeof candidate === 'string') ?? ''
+function getErrorStatusCode(error: unknown): number {
+  const errorRecord = getErrorRecord(error)
+  const responseRecord = getErrorRecord(errorRecord?.response)
+
+  const candidates = [errorRecord?.statusCode, errorRecord?.status, responseRecord?.status]
+  const statusCode = candidates.find(
+    (candidate): candidate is number => typeof candidate === 'number'
+  )
+  return statusCode ?? 500
+}
+
+function getErrorStatusMessage(error: unknown): string {
+  const errorRecord = getErrorRecord(error)
+  const dataRecord = getErrorRecord(errorRecord?.data)
+  const candidates = [dataRecord?.statusMessage, errorRecord?.statusMessage, errorRecord?.message]
+  const message = candidates.find((candidate): candidate is string => typeof candidate === 'string')
   return message || FALLBACK_RECOMMENDATION_ERROR_MESSAGE
 }
 
@@ -318,7 +390,13 @@ function createRecommendationFailure({
   retryable = false,
   staleRecommendations = null,
   staleApplied = false,
-}) {
+}: {
+  statusCode: number
+  statusMessage: string
+  retryable?: boolean
+  staleRecommendations?: unknown
+  staleApplied?: boolean
+}): RecommendationFailure {
   return {
     statusCode,
     statusMessage,
@@ -331,17 +409,19 @@ function createRecommendationFailure({
   }
 }
 
-function createRecommendationFailureFromError(error) {
+function createRecommendationFailureFromError(error: unknown): RecommendationFailure {
+  const errorRecord = getErrorRecord(error)
+  const dataRecord = getErrorRecord(errorRecord?.data)
   const statusCode = getErrorStatusCode(error)
   return createRecommendationFailure({
     statusCode,
     statusMessage: getErrorStatusMessage(error),
     retryable: statusCode === 503,
-    staleRecommendations: error?.data?.staleRecommendations ?? null,
+    staleRecommendations: dataRecord?.staleRecommendations ?? null,
   })
 }
 
-function setRecommendationFailure(failure) {
+function setRecommendationFailure(failure: RecommendationFailure): void {
   recommendationFailure.value = failure
 
   if (failure.retryable) {
@@ -352,12 +432,30 @@ function setRecommendationFailure(failure) {
   clearRetryCooldown()
 }
 
-function applyRecommendations(recommendations) {
+function applyRecommendations(recommendations: unknown): void {
   const recommendationItems = toRecommendationItems(recommendations)
   movies.value = recommendationItems
   originalMovies.value = recommendationItems.map((recommendation) => ({ ...recommendation }))
   currentMovieDetails.value = null
+  rememberSessionRecommendations(recommendationItems)
   hasSuccessfulRecommendationLoad.value = true
+}
+
+function clearUnauthenticatedFallbackTimeout() {
+  if (unauthenticatedFallbackTimeout === null) {
+    return
+  }
+
+  clearTimeout(unauthenticatedFallbackTimeout)
+  unauthenticatedFallbackTimeout = null
+}
+
+function scheduleUnauthenticatedFallback() {
+  clearUnauthenticatedFallbackTimeout()
+  unauthenticatedFallbackTimeout = setTimeout(() => {
+    recommendationsPending.value = false
+    unauthenticatedFallbackTimeout = null
+  }, UNAUTHENTICATED_FALLBACK_DELAY_MS)
 }
 
 const currentMovie = computed(() => movies.value[0] || null)
@@ -427,8 +525,32 @@ const isWatched = computed(() => {
   return watchedMovies.value.some((movie) => movie.tmdbId === id)
 })
 
-function syncDesktopDetailsLayout(mediaQuery) {
-  isDesktopDetailsLayout.value = mediaQuery.matches
+function syncDesktopDetailsLayout(e: MediaQueryListEvent | MediaQueryList): void {
+  const matches = 'matches' in e ? e.matches : (e as MediaQueryList).matches
+  isDesktopDetailsLayout.value = matches
+}
+
+function buildRecommendationQueryParams(mode: FetchMode): Record<string, string> {
+  if (mode === FETCH_MODE.GET_NEW) {
+    const params: Record<string, string> = {
+      [RECOMMENDATION_QUERY.GET_NEW]: 'true',
+    }
+    const sessionRecommendedTmdbIds = buildSessionRecommendationQueryValue()
+
+    if (sessionRecommendedTmdbIds.length > 0) {
+      params[RECOMMENDATION_QUERY.SESSION_RECOMMENDED_TMDB_IDS] = sessionRecommendedTmdbIds
+    }
+
+    return params
+  }
+
+  if (mode === FETCH_MODE.REFRESH) {
+    return {
+      [RECOMMENDATION_QUERY.REFRESH]: 'true',
+    }
+  }
+
+  return {}
 }
 
 onMounted(() => {
@@ -455,6 +577,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (retryTimerHandle !== null) clearInterval(retryTimerHandle)
+  clearUnauthenticatedFallbackTimeout()
   if (desktopDetailsMediaQuery !== null) {
     desktopDetailsMediaQuery.removeEventListener('change', syncDesktopDetailsLayout)
     desktopDetailsMediaQuery = null
@@ -499,7 +622,7 @@ watch(
   { immediate: true }
 )
 
-const fetchRecommendations = async (mode = FETCH_MODE.DEFAULT) => {
+const fetchRecommendations = async (mode: FetchMode = FETCH_MODE.DEFAULT): Promise<void> => {
   if (isFetching) return
   isFetching = true
   recommendationsPending.value = true
@@ -519,14 +642,9 @@ const fetchRecommendations = async (mode = FETCH_MODE.DEFAULT) => {
     if (!session?.access_token) return
     didAttempt = true
 
-    const params =
-      mode === FETCH_MODE.GET_NEW
-        ? { getNew: 'true' }
-        : mode === FETCH_MODE.REFRESH
-          ? { refresh: 'true' }
-          : {}
+    const params = buildRecommendationQueryParams(mode)
 
-    const response = await $fetch('/api/recommend', {
+    const response = await $fetch<RecommendationApiResponse>('/api/recommend', {
       params,
       headers: { Authorization: `Bearer ${session.access_token}` },
     })
@@ -561,7 +679,7 @@ const retryRecommendations = () => fetchRecommendations(lastFetchMode.value)
 const getNewMovies = () => fetchRecommendations(FETCH_MODE.GET_NEW)
 const refreshMovies = () => fetchRecommendations(FETCH_MODE.REFRESH)
 
-const loadPreviousRecommendations = () => {
+const loadPreviousRecommendations = (): void => {
   const staleRecommendations = recommendationFailure.value?.staleRecommendations
   if (!Array.isArray(staleRecommendations) || staleRecommendations.length === 0) return
 
@@ -569,7 +687,7 @@ const loadPreviousRecommendations = () => {
   recommendationFailure.value = null
 }
 
-const resetMovies = () => {
+const resetMovies = (): Promise<void> | void => {
   if (originalMovies.value.length === 0) {
     return fetchRecommendations(FETCH_MODE.DEFAULT)
   }
@@ -588,9 +706,10 @@ watch(
   ([isLoading, _token, hasResolvedOnboarding, hasCompletedOnboarding]) => {
     if (isLoading) return
     if (!isAuthenticated.value) {
-      recommendationsPending.value = false
+      scheduleUnauthenticatedFallback()
       return
     }
+    clearUnauthenticatedFallbackTimeout()
     if (!hasResolvedOnboarding) {
       return
     }
@@ -607,13 +726,13 @@ watch(
   { immediate: true }
 )
 
-const handleDislike = () => {
+const handleDislike = (): void => {
   if (movies.value.length > 0) {
     movies.value.shift()
   }
 }
 
-function buildMovieToSave(rawMovie, details) {
+function buildMovieToSave(rawMovie: RecommendationItem, details: Movie | null): MovieToSave {
   return {
     id: details?.id ?? rawMovie.tmdbId ?? 0,
     title: details?.title ?? '',
@@ -622,7 +741,7 @@ function buildMovieToSave(rawMovie, details) {
   }
 }
 
-const handleLike = async () => {
+const handleLike = async (): Promise<void> => {
   if (!currentMovie.value) return
 
   const rawMovie = currentMovie.value
@@ -644,7 +763,7 @@ const handleLike = async () => {
   }
 }
 
-const handleAddToList = async () => {
+const handleAddToList = async (): Promise<void> => {
   if (!currentMovie.value) return
 
   const rawMovie = currentMovie.value
@@ -661,7 +780,7 @@ const handleAddToList = async () => {
   }
 }
 
-const handleModalClose = () => {
+const handleModalClose = (): void => {
   showLoginModal.value = false
   if (!isAuthenticated.value && pendingModalMovieId.value !== null) {
     removePendingWatchedMovie(pendingModalMovieId.value)

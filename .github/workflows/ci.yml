@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  app:
+    name: App Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Audit app production dependencies
+        run: npm audit --omit=dev
+
+      - name: Typecheck app
+        run: npm run typecheck
+
+      - name: Test app
+        run: npm run test
+
+      - name: Lint app
+        run: npm run lint
+
+      - name: Build app
+        run: npm run build
+
+  docs:
+    name: Docs Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm ci
+
+      - name: Audit docs production dependencies
+        run: npm audit --omit=dev
+
+      - name: Build docs
+        run: npm run build

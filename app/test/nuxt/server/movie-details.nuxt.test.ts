@@ -13,13 +13,29 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const RATE_LIMIT_RESET = 1_234_567_890
+const MOVIE_NOT_FOUND_STATUS_MESSAGE = 'Movie not found'
+const TOO_MANY_MOVIE_DETAIL_REQUESTS_STATUS_MESSAGE = 'Too many movie detail requests'
+const MISSING_GUEST_IDENTITY_STATUS_MESSAGE =
+  'Anonymous movie detail cache misses require x-vercel-forwarded-for'
+const GUEST_IP_HEADER = 'x-vercel-forwarded-for'
+const GUEST_IP = '203.0.113.10'
 
-const { fetchTmdbMock, getOptionalAuthorizedUserMock, getServiceSupabaseMock, limitMovieDetailsMock } =
-  vi.hoisted(() => ({
+const {
+  fetchTmdbMock,
+  getOptionalAuthorizedUserMock,
+  getServiceSupabaseMock,
+  limitMovieDetailsBurstMock,
+  limitMovieDetailsMissesMock,
+  getMovieDetailsNegativeCacheMock,
+  setMovieDetailsNegativeCacheMock,
+} = vi.hoisted(() => ({
   fetchTmdbMock: vi.fn(),
   getOptionalAuthorizedUserMock: vi.fn(),
   getServiceSupabaseMock: vi.fn(),
-  limitMovieDetailsMock: vi.fn(),
+  limitMovieDetailsBurstMock: vi.fn(),
+  limitMovieDetailsMissesMock: vi.fn(),
+  getMovieDetailsNegativeCacheMock: vi.fn(),
+  setMovieDetailsNegativeCacheMock: vi.fn(),
 }))
 
 vi.mock('../../../server/utils/tmdb/client', () => ({
@@ -31,7 +47,13 @@ vi.mock('../../../server/utils/auth/authorize-user', () => ({
 }))
 
 vi.mock('../../../server/utils/movies/details-rate-limit', () => ({
-  limitMovieDetails: limitMovieDetailsMock,
+  limitMovieDetailsBurst: limitMovieDetailsBurstMock,
+  limitMovieDetailsMisses: limitMovieDetailsMissesMock,
+}))
+
+vi.mock('../../../server/utils/movies/negative-cache', () => ({
+  getMovieDetailsNegativeCache: getMovieDetailsNegativeCacheMock,
+  setMovieDetailsNegativeCache: setMovieDetailsNegativeCacheMock,
 }))
 
 vi.mock('../../../server/utils/shared/supabase-client', () => ({
@@ -155,6 +177,25 @@ async function readJson(response: Response) {
   return response.json() as Promise<Record<string, unknown>>
 }
 
+function createRateLimitResult(
+  overrides: Partial<{ success: boolean; limit: number; remaining: number; reset: number }> = {}
+) {
+  return {
+    success: true,
+    limit: 5,
+    remaining: 4,
+    reset: RATE_LIMIT_RESET,
+    ...overrides,
+  }
+}
+
+function createNotFoundError() {
+  return createError({
+    statusCode: 404,
+    statusMessage: 'Movie data is temporarily unavailable.',
+  })
+}
+
 describe('/api/movies/:id', () => {
   const app = createApp()
   app.use(
@@ -201,12 +242,10 @@ describe('/api/movies/:id', () => {
     getServiceSupabaseMock.mockReturnValue(createMockSupabase(state))
     getOptionalAuthorizedUserMock.mockResolvedValue(null)
     fetchTmdbMock.mockResolvedValue(createTmdbDetails())
-    limitMovieDetailsMock.mockResolvedValue({
-      success: true,
-      limit: 5,
-      remaining: 4,
-      reset: RATE_LIMIT_RESET,
-    })
+    limitMovieDetailsBurstMock.mockResolvedValue(createRateLimitResult())
+    limitMovieDetailsMissesMock.mockResolvedValue(createRateLimitResult())
+    getMovieDetailsNegativeCacheMock.mockResolvedValue(false)
+    setMovieDetailsNegativeCacheMock.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -223,15 +262,25 @@ describe('/api/movies/:id', () => {
     expect(body.poster).toBe('https://image.tmdb.org/t/p/w500/fight-club.jpg')
     expect(body.runtime).toBe(139)
     expect(fetchTmdbMock).not.toHaveBeenCalled()
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
+    expect(getMovieDetailsNegativeCacheMock).not.toHaveBeenCalled()
     expect(state.upsertPayload).toBeNull()
   })
 
   it('refreshes the cache when cached_at is null', async () => {
     state.row = { ...completeRow, cached_at: null }
 
-    const response = await fetch(`${baseUrl}/api/movies/550`)
+    const response = await fetch(`${baseUrl}/api/movies/550`, {
+      headers: {
+        [GUEST_IP_HEADER]: GUEST_IP,
+      },
+    })
 
     expect(response.status).toBe(200)
+    expect(getMovieDetailsNegativeCacheMock).toHaveBeenCalledWith(550)
+    expect(limitMovieDetailsMissesMock).toHaveBeenCalledWith(expect.anything(), {
+      guestIp: GUEST_IP,
+    })
     expect(fetchTmdbMock).toHaveBeenCalledWith(expect.anything(), '/movie/550', {
       append_to_response: 'credits,videos',
     })
@@ -247,9 +296,17 @@ describe('/api/movies/:id', () => {
   it('refreshes the cache when required sentinel fields are missing', async () => {
     state.row = { ...completeRow, title: '', poster_path: '', genres: [], runtime: 0 }
 
-    const response = await fetch(`${baseUrl}/api/movies/550`)
+    const response = await fetch(`${baseUrl}/api/movies/550`, {
+      headers: {
+        [GUEST_IP_HEADER]: GUEST_IP,
+      },
+    })
 
     expect(response.status).toBe(200)
+    expect(getMovieDetailsNegativeCacheMock).toHaveBeenCalledWith(550)
+    expect(limitMovieDetailsMissesMock).toHaveBeenCalledWith(expect.anything(), {
+      guestIp: GUEST_IP,
+    })
     expect(fetchTmdbMock).toHaveBeenCalledTimes(1)
     expect(state.upsertPayload).toMatchObject({
       title: 'Fight Club',
@@ -263,12 +320,9 @@ describe('/api/movies/:id', () => {
     getOptionalAuthorizedUserMock.mockResolvedValue({
       user: { id: 'user-123' },
     })
-    limitMovieDetailsMock.mockResolvedValue({
-      success: false,
-      limit: 20,
-      remaining: 0,
-      reset: RATE_LIMIT_RESET,
-    })
+    limitMovieDetailsBurstMock.mockResolvedValue(
+      createRateLimitResult({ success: false, limit: 20, remaining: 0 })
+    )
 
     const response = await fetch(`${baseUrl}/api/movies/550`, {
       headers: {
@@ -278,52 +332,160 @@ describe('/api/movies/:id', () => {
     const body = await readJson(response)
 
     expect(response.status).toBe(429)
-    expect(body.statusMessage).toBe('Too many movie detail requests')
-    expect(limitMovieDetailsMock).toHaveBeenCalledWith(expect.anything(), {
+    expect(body.statusMessage).toBe(TOO_MANY_MOVIE_DETAIL_REQUESTS_STATUS_MESSAGE)
+    expect(limitMovieDetailsBurstMock).toHaveBeenCalledWith(expect.anything(), {
       userId: 'user-123',
     })
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
     expect(fetchTmdbMock).not.toHaveBeenCalled()
   })
 
   it('rate-limits guests by the Vercel forwarded IP header', async () => {
-    limitMovieDetailsMock.mockResolvedValue({
-      success: false,
-      limit: 10,
-      remaining: 0,
-      reset: RATE_LIMIT_RESET,
-    })
+    limitMovieDetailsBurstMock.mockResolvedValue(
+      createRateLimitResult({ success: false, limit: 10, remaining: 0 })
+    )
 
     const response = await fetch(`${baseUrl}/api/movies/550`, {
       headers: {
-        'x-vercel-forwarded-for': '203.0.113.10, 198.51.100.2',
+        [GUEST_IP_HEADER]: `${GUEST_IP}, 198.51.100.2`,
       },
     })
     const body = await readJson(response)
 
     expect(response.status).toBe(429)
-    expect(body.statusMessage).toBe('Too many movie detail requests')
-    expect(limitMovieDetailsMock).toHaveBeenCalledWith(expect.anything(), {
-      guestIp: '203.0.113.10',
+    expect(body.statusMessage).toBe(TOO_MANY_MOVIE_DETAIL_REQUESTS_STATUS_MESSAGE)
+    expect(limitMovieDetailsBurstMock).toHaveBeenCalledWith(expect.anything(), {
+      guestIp: GUEST_IP,
     })
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
     expect(fetchTmdbMock).not.toHaveBeenCalled()
   })
 
-  it('falls back to the request IP when the Vercel forwarded IP header is missing', async () => {
-    limitMovieDetailsMock.mockResolvedValue({
-      success: false,
-      limit: 10,
-      remaining: 0,
-      reset: RATE_LIMIT_RESET,
-    })
+  it('falls back to the request IP for the short-window guest limiter when the Vercel header is missing', async () => {
+    limitMovieDetailsBurstMock.mockResolvedValue(
+      createRateLimitResult({ success: false, limit: 10, remaining: 0 })
+    )
 
     const response = await fetch(`${baseUrl}/api/movies/550`)
     const body = await readJson(response)
 
     expect(response.status).toBe(429)
-    expect(body.statusMessage).toBe('Too many movie detail requests')
-    expect(limitMovieDetailsMock).toHaveBeenCalledWith(expect.anything(), {
+    expect(body.statusMessage).toBe(TOO_MANY_MOVIE_DETAIL_REQUESTS_STATUS_MESSAGE)
+    expect(limitMovieDetailsBurstMock).toHaveBeenCalledWith(expect.anything(), {
       guestIp: '127.0.0.1',
     })
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
+    expect(fetchTmdbMock).not.toHaveBeenCalled()
+  })
+
+  it('returns a cached negative lookup without charging the miss budget or calling TMDB', async () => {
+    state.row = null
+    getMovieDetailsNegativeCacheMock.mockResolvedValue(true)
+
+    const response = await fetch(`${baseUrl}/api/movies/550`)
+    const body = await readJson(response)
+
+    expect(response.status).toBe(404)
+    expect(body.statusMessage).toBe(MOVIE_NOT_FOUND_STATUS_MESSAGE)
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
+    expect(fetchTmdbMock).not.toHaveBeenCalled()
+    expect(setMovieDetailsNegativeCacheMock).not.toHaveBeenCalled()
+  })
+
+  it('writes a negative cache entry when TMDB returns not found', async () => {
+    state.row = null
+    fetchTmdbMock.mockRejectedValue(createNotFoundError())
+
+    const response = await fetch(`${baseUrl}/api/movies/550`, {
+      headers: {
+        [GUEST_IP_HEADER]: GUEST_IP,
+      },
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(404)
+    expect(body.statusMessage).toBe(MOVIE_NOT_FOUND_STATUS_MESSAGE)
+    expect(limitMovieDetailsMissesMock).toHaveBeenCalledWith(expect.anything(), {
+      guestIp: GUEST_IP,
+    })
+    expect(setMovieDetailsNegativeCacheMock).toHaveBeenCalledWith(550)
+  })
+
+  it('does not write a negative cache entry for non-404 TMDB failures', async () => {
+    state.row = null
+    fetchTmdbMock.mockRejectedValue(
+      createError({
+        statusCode: 503,
+        statusMessage: 'Movie data is temporarily unavailable.',
+      })
+    )
+
+    const response = await fetch(`${baseUrl}/api/movies/550`, {
+      headers: {
+        [GUEST_IP_HEADER]: GUEST_IP,
+      },
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(503)
+    expect(body.statusMessage).toBe('Movie data is temporarily unavailable.')
+    expect(setMovieDetailsNegativeCacheMock).not.toHaveBeenCalled()
+  })
+
+  it('rate-limits uncached authenticated misses by user id', async () => {
+    state.row = null
+    getOptionalAuthorizedUserMock.mockResolvedValue({
+      user: { id: 'user-123' },
+    })
+    limitMovieDetailsMissesMock.mockResolvedValue(
+      createRateLimitResult({ success: false, limit: 100, remaining: 0 })
+    )
+
+    const response = await fetch(`${baseUrl}/api/movies/550`, {
+      headers: {
+        Authorization: 'Bearer valid-token',
+      },
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(429)
+    expect(body.statusMessage).toBe(TOO_MANY_MOVIE_DETAIL_REQUESTS_STATUS_MESSAGE)
+    expect(limitMovieDetailsMissesMock).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-123',
+    })
+    expect(fetchTmdbMock).not.toHaveBeenCalled()
+  })
+
+  it('rate-limits uncached guest misses by forwarded IP', async () => {
+    state.row = null
+    limitMovieDetailsMissesMock.mockResolvedValue(
+      createRateLimitResult({ success: false, limit: 20, remaining: 0 })
+    )
+
+    const response = await fetch(`${baseUrl}/api/movies/550`, {
+      headers: {
+        [GUEST_IP_HEADER]: GUEST_IP,
+      },
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(429)
+    expect(body.statusMessage).toBe(TOO_MANY_MOVIE_DETAIL_REQUESTS_STATUS_MESSAGE)
+    expect(limitMovieDetailsMissesMock).toHaveBeenCalledWith(expect.anything(), {
+      guestIp: GUEST_IP,
+    })
+    expect(fetchTmdbMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects anonymous uncached misses when the Vercel header is missing', async () => {
+    state.row = null
+
+    const response = await fetch(`${baseUrl}/api/movies/550`)
+    const body = await readJson(response)
+
+    expect(response.status).toBe(400)
+    expect(body.statusMessage).toBe(MISSING_GUEST_IDENTITY_STATUS_MESSAGE)
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
     expect(fetchTmdbMock).not.toHaveBeenCalled()
   })
 })

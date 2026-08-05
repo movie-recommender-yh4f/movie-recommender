@@ -8,6 +8,15 @@ import type {
 import { fetchMovieListMetadata } from '~/composables/useMovieListMetadata'
 
 const PENDING_WATCHED_STORAGE_KEY = 'movie-recommender-pending-watched'
+const WATCHED_MOVIES_LOADED_STATE_KEY = 'watched-loaded'
+
+interface WatchedSyncOptions {
+  accessToken?: string
+  force?: boolean
+}
+
+// to avoid multiple simultaneous requests to sync watched movies from Supabase
+let watchedMoviesSyncRequest: Promise<void> | null = null
 
 const isPendingWatchedMovie = (movie: unknown): movie is PendingWatchedMovie => {
   if (!movie || typeof movie !== 'object') {
@@ -69,33 +78,62 @@ export const useWatchedMovies = () => {
 
   const watchedMovies = useState<WatchedMovie[]>('watched', () => [])
   const pendingWatchedMovies = useState<PendingWatchedMovie[]>('pending-watched', () => [])
+  const hasLoadedWatchedMovies = useState<boolean>(WATCHED_MOVIES_LOADED_STATE_KEY, () => false)
 
   const { load: loadPendingWatchedFromStorage, persist: persistPendingWatchedToStorage } =
     usePendingStorage(PENDING_WATCHED_STORAGE_KEY, pendingWatchedMovies, isPendingWatchedMovie)
 
-  const clearWatchedMovies = () => {
-    watchedMovies.value = []
+  const normalizeSyncOptions = (options?: string | WatchedSyncOptions): WatchedSyncOptions => {
+    if (typeof options === 'string') {
+      return { accessToken: options }
+    }
+
+    return options ?? {}
   }
 
-  const syncWatchedMoviesFromSupabase = async (accessToken?: string) => {
-    try {
-      const token = await resolveAccessToken(supabase, accessToken)
+  const clearWatchedMovies = () => {
+    watchedMovies.value = []
+    hasLoadedWatchedMovies.value = false
+    watchedMoviesSyncRequest = null
+  }
 
-      if (!token) {
-        watchedMovies.value = []
-        return
+  const syncWatchedMoviesFromSupabase = async (options?: string | WatchedSyncOptions) => {
+    const { accessToken, force = false } = normalizeSyncOptions(options)
+
+    if (!force && hasLoadedWatchedMovies.value) {
+      return
+    }
+
+    if (watchedMoviesSyncRequest) {
+      return watchedMoviesSyncRequest
+    }
+
+    watchedMoviesSyncRequest = (async () => {
+      try {
+        const token = await resolveAccessToken(supabase, accessToken)
+
+        if (!token) {
+          clearWatchedMovies()
+          return
+        }
+
+        const response = await $fetch<{ success: boolean; tmdbIds: number[] }>('/api/watched', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+
+        const metadata = await fetchMovieListMetadata(token, response.tmdbIds)
+        watchedMovies.value = mergeWatchedMetadata(watchedMovies.value, metadata)
+        hasLoadedWatchedMovies.value = true
+      } catch {
+      } finally {
+        watchedMoviesSyncRequest = null
       }
+    })()
 
-      const response = await $fetch<{ success: boolean; tmdbIds: number[] }>('/api/watched', {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      const metadata = await fetchMovieListMetadata(token, response.tmdbIds)
-      watchedMovies.value = mergeWatchedMetadata(watchedMovies.value, metadata)
-    } catch {}
+    return watchedMoviesSyncRequest
   }
 
   const syncMyListAfterWatchingMovie = async (movieId: number) => {
@@ -201,7 +239,7 @@ export const useWatchedMovies = () => {
         body: { tmdbId },
       })
     } catch {
-      await syncWatchedMoviesFromSupabase()
+      await syncWatchedMoviesFromSupabase({ force: true })
       return 'error'
     }
 

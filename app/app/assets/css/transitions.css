@@ -298,3 +298,7 @@ html.theme-transitioning *:not(.theme-toggle):not(.theme-toggle *)::after {
     border-color 300ms ease,
     fill 300ms ease !important;
 }
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}

@@ -22,6 +22,7 @@
   },
   "overrides": {
     "confbox": "0.2.2",
+    "esbuild": "^0.28.1",
     "hono": "^4.12.14",
     "postcss": "^8.5.10"
   }

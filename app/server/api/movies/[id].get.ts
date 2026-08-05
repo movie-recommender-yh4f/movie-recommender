@@ -1,6 +1,14 @@
 import type { H3Event } from 'h3'
 import { getOptionalAuthorizedUser } from '../../utils/auth/authorize-user'
-import { limitMovieDetails } from '../../utils/movies/details-rate-limit'
+import {
+  limitMovieDetailsBurst,
+  limitMovieDetailsMisses,
+  type MovieDetailsIdentity,
+} from '../../utils/movies/details-rate-limit'
+import {
+  getMovieDetailsNegativeCache,
+  setMovieDetailsNegativeCache,
+} from '../../utils/movies/negative-cache'
 import { createServiceSupabaseClient } from '../../utils/shared/supabase-client'
 import { throwSupabaseError } from '../../utils/shared/api-error'
 import { IMAGE_BASE } from '../../utils/tmdb/constants'
@@ -69,6 +77,11 @@ interface MovieResponse {
   trailer: string | null
 }
 
+interface MovieRequestContext {
+  missIdentity: MovieDetailsIdentity | null
+  shortWindowIdentity: MovieDetailsIdentity
+}
+
 const CACHE_TTL_MONTHS = 3
 const DAYS_PER_MONTH = 30
 const HOURS_PER_DAY = 24
@@ -91,9 +104,12 @@ const TRAILER_TYPE = 'Trailer'
 const MOVIE_ID_PATTERN = /^\d+$/
 const MOVIES_TABLE = 'movies'
 const MOVIE_DATA_UNAVAILABLE_MESSAGE = 'Movie data is temporarily unavailable.'
+const MOVIE_NOT_FOUND_MESSAGE = 'Movie not found'
 const TOO_MANY_MOVIE_DETAIL_REQUESTS_MESSAGE = 'Too many movie detail requests'
 const VERCEL_FORWARDED_FOR_HEADER = 'x-vercel-forwarded-for'
 const UNKNOWN_GUEST_IP = 'unknown'
+const MISSING_GUEST_IDENTITY_MESSAGE =
+  'Anonymous movie detail cache misses require x-vercel-forwarded-for'
 
 function isPositiveInteger(value: number): boolean {
   return Number.isInteger(value) && value > 0
@@ -229,20 +245,82 @@ async function fetchCachedMovie(
   return { supabase, row: data as MovieRow | null }
 }
 
-function getGuestIp(event: H3Event): string {
+function getTrustedGuestIp(event: H3Event): string | null {
   const vercelForwardedFor = getHeader(event, VERCEL_FORWARDED_FOR_HEADER)
-  if (vercelForwardedFor) {
-    return vercelForwardedFor.split(',')[0]?.trim() || UNKNOWN_GUEST_IP
+
+  if (!vercelForwardedFor) {
+    return null
   }
 
-  return getRequestIP(event) ?? UNKNOWN_GUEST_IP
+  return vercelForwardedFor.split(',')[0]?.trim() || null
 }
 
-async function enforceMovieDetailsRateLimit(event: H3Event): Promise<void> {
+function getBurstGuestIp(event: H3Event): string {
+  return getTrustedGuestIp(event) ?? getRequestIP(event) ?? UNKNOWN_GUEST_IP
+}
+
+function getErrorStatusCode(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) {
+    return null
+  }
+
+  const record = error as Record<string, unknown>
+
+  return typeof record.statusCode === 'number' ? record.statusCode : null
+}
+
+async function buildMovieRequestContext(event: H3Event): Promise<MovieRequestContext> {
   const authorizedUser = await getOptionalAuthorizedUser(event)
-  const rateLimit = authorizedUser
-    ? await limitMovieDetails(event, { userId: authorizedUser.user.id })
-    : await limitMovieDetails(event, { guestIp: getGuestIp(event) })
+
+  if (authorizedUser) {
+    return {
+      shortWindowIdentity: { userId: authorizedUser.user.id },
+      missIdentity: { userId: authorizedUser.user.id },
+    }
+  }
+
+  return {
+    shortWindowIdentity: { guestIp: getBurstGuestIp(event) },
+    missIdentity: (() => {
+      const trustedGuestIp = getTrustedGuestIp(event)
+
+      if (!trustedGuestIp) {
+        return null
+      }
+
+      return { guestIp: trustedGuestIp }
+    })(),
+  }
+}
+
+async function enforceMovieDetailsBurstLimit(
+  event: H3Event,
+  identity: MovieDetailsIdentity
+): Promise<void> {
+  const rateLimit = await limitMovieDetailsBurst(event, identity)
+
+  if (rateLimit.success) {
+    return
+  }
+
+  throw createError({
+    statusCode: 429,
+    statusMessage: TOO_MANY_MOVIE_DETAIL_REQUESTS_MESSAGE,
+  })
+}
+
+async function enforceMovieDetailsMissLimit(
+  event: H3Event,
+  identity: MovieDetailsIdentity | null
+): Promise<void> {
+  if (!identity) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: MISSING_GUEST_IDENTITY_MESSAGE,
+    })
+  }
+
+  const rateLimit = await limitMovieDetailsMisses(event, identity)
 
   if (rateLimit.success) {
     return
@@ -266,7 +344,9 @@ export default defineEventHandler(async (event): Promise<MovieResponse> => {
     throw createError({ statusCode: 400, message: 'Invalid movie id' })
   }
 
-  await enforceMovieDetailsRateLimit(event)
+  const requestContext = await buildMovieRequestContext(event)
+
+  await enforceMovieDetailsBurstLimit(event, requestContext.shortWindowIdentity)
 
   const { supabase, row } = await fetchCachedMovie(event, id)
 
@@ -274,23 +354,44 @@ export default defineEventHandler(async (event): Promise<MovieResponse> => {
     return toMovieResponse(row)
   }
 
-  const data = (await fetchTmdb(event, `/movie/${id}`, {
-    append_to_response: 'credits,videos',
-  })) as TMDBMovieDetails
-  const movieRow = tmdbDetailsToRow(data, new Date().toISOString())
-  const { error } = await supabase.from(MOVIES_TABLE).upsert(movieRow, { onConflict: 'tmdb_id' })
-
-  if (error) {
-    throwSupabaseError(event, error, {
-      event: 'movie_details.cache_write_failed',
-      tmdbId: id,
-      publicMessage: MOVIE_DATA_UNAVAILABLE_MESSAGE,
-      extra: {
-        table: MOVIES_TABLE,
-        operation: 'upsert',
-      },
+  if (await getMovieDetailsNegativeCache(id)) {
+    throw createError({
+      statusCode: 404,
+      statusMessage: MOVIE_NOT_FOUND_MESSAGE,
     })
   }
 
-  return toMovieResponse(movieRow)
+  await enforceMovieDetailsMissLimit(event, requestContext.missIdentity)
+
+  try {
+    const data = (await fetchTmdb(event, `/movie/${id}`, {
+      append_to_response: 'credits,videos',
+    })) as TMDBMovieDetails
+    const movieRow = tmdbDetailsToRow(data, new Date().toISOString())
+    const { error } = await supabase.from(MOVIES_TABLE).upsert(movieRow, { onConflict: 'tmdb_id' })
+
+    if (error) {
+      throwSupabaseError(event, error, {
+        event: 'movie_details.cache_write_failed',
+        tmdbId: id,
+        publicMessage: MOVIE_DATA_UNAVAILABLE_MESSAGE,
+        extra: {
+          table: MOVIES_TABLE,
+          operation: 'upsert',
+        },
+      })
+    }
+
+    return toMovieResponse(movieRow)
+  } catch (error: unknown) {
+    if (getErrorStatusCode(error) === 404) {
+      await setMovieDetailsNegativeCache(id)
+      throw createError({
+        statusCode: 404,
+        statusMessage: MOVIE_NOT_FOUND_MESSAGE,
+      })
+    }
+
+    throw error
+  }
 })

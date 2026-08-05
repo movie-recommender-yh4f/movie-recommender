@@ -1,5 +1,5 @@
 import {
-  getInitialRecommendationCount,
+  INITIAL_RECOMMENDATION_COUNT,
   MAX_MY_LIST_RECOMMENDATIONS,
   TARGET_RECOMMENDATIONS,
   UNKNOWN_YEAR_LABEL,
@@ -7,16 +7,20 @@ import {
 import { buildTasteProfile } from './taste-profile'
 import type { WatchedMovieRecord } from './types'
 
-const SYSTEM_PROMPT = `You are a movie recommendation engine.
+function createSystemPrompt(candidateCount: number): string {
+  return `You are a movie recommendation engine.
 Analyze the user's taste profile from their watch history: preferred genres, directors, eras, themes, and tone.
 
-Recommend exactly __INITIAL_RECOMMENDATION_COUNT__ candidate movies, obeying these rules:
+Recommend exactly ${candidateCount} candidate movies, obeying these rules:
 1. Backend validation is the source of truth. You suggest candidates; the server will remove watched movies, repeated recommendations, unresolved titles, duplicate TMDB matches, and excess My List matches.
 2. WATCHLIST (My List): The user already knows about these movies and has deliberately saved them. Prefer undiscovered movies; the server will keep at most ${MAX_MY_LIST_RECOMMENDATIONS} My List matches.
 3. Aim for variety across genres and decades while staying true to the inferred taste profile.
 4. Return movie titles in their original release language and script exactly as TMDB original_title. Do not transliterate, anglicize, or use localized variants (e.g. ゴジラ-1.0 not Godzilla Minus One).
-5. Every item must include a stable "index" inside the response, "title", "release_year" when known or null when unknown, and "short_reason".
-6. Respond ONLY with structured recommendations. No explanation, no markdown, no code fences.`
+5. Each recommendation must be a tuple: [title, release_year], using null when the year is unknown.
+6. Return ONLY valid JSON. No markdown. No explanations. No comments. No trailing text.
+7. Return exactly ${candidateCount} recommendations.
+8. Use this exact format: {"recommendations":[["Movie title",2012],["Another movie",null]]}`
+}
 
 const EXACT_ORIGINAL_TITLE_PROMPT_SUFFIX = `
 Additional hard requirements:
@@ -38,27 +42,13 @@ export const RECOMMENDATION_RESPONSE_SCHEMA = {
     recommendations: {
       type: 'array',
       items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          index: {
-            type: 'integer',
-            description: 'Stable item index inside this response',
-          },
-          title: {
-            type: 'string',
-            description: 'Movie title in original release language/script',
-          },
-          release_year: {
-            anyOf: [{ type: 'integer' }, { type: 'null' }],
-            description: 'Release year when known, otherwise null',
-          },
-          short_reason: {
-            type: 'string',
-            description: 'Brief reason this movie fits the taste profile',
-          },
-        },
-        required: ['index', 'title', 'release_year', 'short_reason'],
+        type: 'array',
+        prefixItems: [
+          { type: 'string', description: 'Movie title in original release language/script' },
+          { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+        ],
+        minItems: 2,
+        maxItems: 2,
       },
     },
   },
@@ -72,37 +62,23 @@ export const REPLACEMENT_RESPONSE_SCHEMA = {
     recommendations: {
       type: 'array',
       items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          replaced_index: {
-            type: 'integer',
-            description: 'Blocked index from the previous assistant response this item replaces',
-          },
-          title: {
-            type: 'string',
-            description: 'Movie title in original release language/script',
-          },
-          release_year: {
-            anyOf: [{ type: 'integer' }, { type: 'null' }],
-            description: 'Release year when known, otherwise null',
-          },
-          short_reason: {
-            type: 'string',
-            description: 'Brief reason this replacement fits the taste profile',
-          },
-        },
-        required: ['replaced_index', 'title', 'release_year', 'short_reason'],
+        type: 'array',
+        prefixItems: [
+          { type: 'string', description: 'Movie title in original release language/script' },
+          { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+        ],
+        minItems: 2,
+        maxItems: 2,
       },
     },
   },
   required: ['recommendations'],
 } satisfies Record<string, unknown>
 
-export function createRecommendationSystemPrompt(): string {
-  const initialRecommendationCount = getInitialRecommendationCount()
-  const systemPrompt = SYSTEM_PROMPT.replace('__INITIAL_RECOMMENDATION_COUNT__', initialRecommendationCount.toString())
-  return `${systemPrompt}\n${EXACT_ORIGINAL_TITLE_PROMPT_SUFFIX}\n${POPULAR_MOVIE_PROMPT_SUFFIX}`
+export function createRecommendationSystemPrompt(
+  candidateCount: number = INITIAL_RECOMMENDATION_COUNT
+): string {
+  return `${createSystemPrompt(candidateCount)}\n${EXACT_ORIGINAL_TITLE_PROMPT_SUFFIX}\n${POPULAR_MOVIE_PROMPT_SUFFIX}`
 }
 
 function formatRecommendationYear(year: number | null): string {
@@ -129,9 +105,9 @@ function formatPromptMovies(movies: WatchedMovieRecord[], includeGenres: boolean
 export function buildUserMessage(
   watchedMovies: WatchedMovieRecord[],
   myListMovies: WatchedMovieRecord[],
-  excludedMovies: Array<{ name: string; originalName?: string; year: number | null }> = []
+  excludedMovies: Array<{ name: string; originalName?: string; year: number | null }> = [],
+  candidateCount: number = INITIAL_RECOMMENDATION_COUNT
 ): string {
-  const initialRecommendationCount = getInitialRecommendationCount()
   const tasteProfile = buildTasteProfile(watchedMovies, myListMovies)
   const topGenres = tasteProfile.topGenres.length > 0 ? tasteProfile.topGenres.join(', ') : 'None'
   const favoriteDecades =
@@ -164,8 +140,11 @@ ${formatPromptMovies(tasteProfile.topWatchedMovies, false)}
 MY LIST REMINDERS:
 ${formatPromptMovies(tasteProfile.myListReminderMovies, false)}
 ${excludedSection}
-Recommend exactly ${initialRecommendationCount} candidate movies I would enjoy. These are candidates, not final output: the server will remove watched movies, recently recommended movies, unresolved titles, duplicates, and excess My List matches before keeping up to ${TARGET_RECOMMENDATIONS} final recommendations. At most ${MAX_MY_LIST_RECOMMENDATIONS} final recommendations may come from My List.
-Prefer undiscovered movies over My List reminders.`
+Recommend exactly ${candidateCount} candidate movies I would enjoy. These are candidates, not final output: the server will remove watched movies, recently recommended movies, unresolved titles, duplicates, and excess My List matches before keeping up to ${TARGET_RECOMMENDATIONS} final recommendations. At most ${MAX_MY_LIST_RECOMMENDATIONS} final recommendations may come from My List.
+Prefer undiscovered movies over My List reminders.
+Return ONLY valid JSON. No markdown. No explanations. No comments. No trailing text.
+Return exactly ${candidateCount} recommendations.
+Use this exact format: {"recommendations":[["Movie title",2012],["Another movie",null]]}`
 }
 
 export function buildReplacementUserMessage(
@@ -187,5 +166,8 @@ new_replacements_needed: ${replacementsNeeded}
 You already know which titles those indexes refer to from your previous assistant response.
 Generate only ${replacementsNeeded} replacement recommendations for blocked indexes.
 Do not repeat accepted or blocked recommendations from earlier rounds.
-Each item must include replaced_index, title, release_year, and short_reason.${deeperCutGuidance}`
+Map tuple positions to blocked_indexes in the same order.
+Return ONLY valid JSON. No markdown. No explanations. No comments. No trailing text.
+Return exactly ${replacementsNeeded} recommendations.
+Use this exact format: {"recommendations":[["Movie title",2012],["Another movie",null]]}${deeperCutGuidance}`
 }

@@ -25,6 +25,22 @@ export interface PlatformAiMessage {
   content: string
 }
 
+export interface PlatformAiResponse {
+  content: string
+  finishReason: string | null
+  provider: 'google' | 'openrouter'
+  model: string
+  responseMode: 'json_schema'
+  usage: unknown
+}
+
+interface AskPlatformAiOptions {
+  excludedModels?: Array<{
+    provider: PlatformAiResponse['provider']
+    model: string
+  }>
+}
+
 interface PlatformAiProviderConfig {
   provider: 'google' | 'openrouter'
   baseUrl: string
@@ -254,7 +270,7 @@ async function createChatCompletion(
   provider: PlatformAiProviderConfig,
   model: string,
   request: PlatformAiRequest
-): Promise<string> {
+): Promise<PlatformAiResponse> {
   try {
     const completion = await createOpenAIClient(provider).chat.completions.create({
       model,
@@ -281,7 +297,14 @@ async function createChatCompletion(
       })
     }
 
-    return content
+    return {
+      content,
+      finishReason: completion.choices[0]?.finish_reason ?? null,
+      provider: provider.provider,
+      model,
+      responseMode: 'json_schema',
+      usage: completion.usage ?? null,
+    }
   } catch (error) {
     throw createProviderError(error, {
       provider: provider.provider,
@@ -291,7 +314,10 @@ async function createChatCompletion(
   }
 }
 
-export async function askPlatformAi(request: PlatformAiRequest): Promise<string> {
+export async function askPlatformAiResponse(
+  request: PlatformAiRequest,
+  options?: AskPlatformAiOptions
+): Promise<PlatformAiResponse> {
   const providers = getPlatformAiProviderConfig(request.event, request.userId)
 
   if ((request.rateLimit ?? true) && request.userId) {
@@ -313,9 +339,16 @@ export async function askPlatformAi(request: PlatformAiRequest): Promise<string>
 
   let lastError: unknown = null
   const attempts: ProviderAttempt[] = []
+  const excludedModels = new Set(
+    (options?.excludedModels ?? []).map(({ provider, model }) => `${provider}:${model}`)
+  )
 
   for (const provider of providers) {
     for (const model of provider.models) {
+      if (excludedModels.has(`${provider.provider}:${model}`)) {
+        continue
+      }
+
       try {
         return await createChatCompletion(provider, model, request)
       } catch (error) {
@@ -326,6 +359,21 @@ export async function askPlatformAi(request: PlatformAiRequest): Promise<string>
   }
 
   if (lastError) {
+    logPrivateError({
+      cause: lastError,
+      event: 'recommendation.ai_provider_all_attempts_failed',
+      source: 'ai_provider',
+      statusCode: getProviderErrorStatusCode(lastError) ?? BAD_GATEWAY_STATUS_CODE,
+      route: request.event?.path,
+      method: request.event?.method,
+      userId: request.userId,
+      extra: {
+        attempts,
+        excludedModels: options?.excludedModels ?? [],
+        schemaName: request.schemaName,
+      },
+    })
+
     throw attachAttempts(lastError, attempts)
   }
 
@@ -333,4 +381,10 @@ export async function askPlatformAi(request: PlatformAiRequest): Promise<string>
     statusCode: 503,
     statusMessage: 'Service is temporarily unavailable.',
   })
+}
+
+export async function askPlatformAi(request: PlatformAiRequest): Promise<string> {
+  const response = await askPlatformAiResponse(request)
+
+  return response.content
 }

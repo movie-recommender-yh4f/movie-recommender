@@ -21,6 +21,10 @@ interface SignupError extends Error {
   code?: typeof EMAIL_ALREADY_REGISTERED_CODE
 }
 
+interface LogoutOptions {
+  scope?: 'global' | 'local'
+}
+
 function toSignupError(error: unknown): SignupError {
   const errorData =
     typeof error === 'object' && error !== null
@@ -41,6 +45,7 @@ function toSignupError(error: unknown): SignupError {
 
 export const useAuth = () => {
   const supabase = useSupabase()
+  const { clearSessionRecommendations } = useRecommendationSession()
   const { syncWatchedMoviesFromSupabase, processPendingWatchedMovies, clearWatchedMovies } =
     useWatchedMovies()
   const { syncMyListFromSupabase, processPendingMyListMovies, clearMyList } = useMyList()
@@ -48,6 +53,15 @@ export const useAuth = () => {
 
   const isAuthenticated = computed(() => !!user.value)
   const userEmail = computed(() => user.value?.email || '')
+
+  const resetClientState = () => {
+    user.value = null
+    session.value = null
+    clearStatus()
+    clearWatchedMovies()
+    clearMyList()
+    clearSessionRecommendations()
+  }
 
   const scheduleSavedMovieStateSyncAfterAuth = (accessToken?: string) => {
     if (pendingAuthSyncTimeout) {
@@ -75,16 +89,15 @@ export const useAuth = () => {
       return
     }
 
-    await syncWatchedMoviesFromSupabase(accessToken)
-    await syncMyListFromSupabase(accessToken)
-
     const processedWatchedMovies = await processPendingWatchedMovies(accessToken)
     const processedMyListMovies = await processPendingMyListMovies(accessToken)
-    const didProcessPendingMovies = processedWatchedMovies > 0 || processedMyListMovies > 0
 
-    if (didProcessPendingMovies) {
-      await syncWatchedMoviesFromSupabase(accessToken)
-      await syncMyListFromSupabase(accessToken)
+    if (processedWatchedMovies > 0) {
+      await syncWatchedMoviesFromSupabase({ accessToken, force: true })
+    }
+
+    if (processedMyListMovies > 0) {
+      await syncMyListFromSupabase({ accessToken, force: true })
     }
   }
 
@@ -146,17 +159,13 @@ export const useAuth = () => {
     }
   }
 
-  const logout = async () => {
+  const logout = async (options?: LogoutOptions) => {
     try {
-      const { error } = await supabase.auth.signOut()
+      const { error } = await supabase.auth.signOut(options)
 
       if (error) throw error
 
-      user.value = null
-      session.value = null
-      clearStatus()
-      clearWatchedMovies()
-      clearMyList()
+      resetClientState()
     } catch {}
   }
 
@@ -274,5 +283,6 @@ export const useAuth = () => {
     verifyPasswordResetOtp,
     updatePassword,
     setCurrentUser,
+    resetClientState,
   }
 }

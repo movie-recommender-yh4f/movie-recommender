@@ -426,7 +426,8 @@ describe('/api/recommend', () => {
       watched_hash: 'stale-hash',
       expires_at: '2026-04-01T00:00:00.000Z',
     }
-    const nonMyListIds = [300, ...Array.from({ length: 17 }, (_, index) => 301 + index)]
+    const sessionExcludedTmdbId = 400
+    const nonMyListIds = [300, sessionExcludedTmdbId, ...Array.from({ length: 17 }, (_, index) => 301 + index)]
     const myListMovies = Array.from({ length: MAX_MY_LIST_RECOMMENDATIONS + 2 }, (_, index) => ({
       tmdbId: 21 + index,
       title: `My List ${index + 1}`,
@@ -438,11 +439,12 @@ describe('/api/recommend', () => {
       createRecommendation(200, 3),
       createRecommendation(300, 4),
       createRecommendation(300, 5),
-      ...nonMyListIds.slice(1).map((tmdbId, index) => createRecommendation(tmdbId, index + 6)),
+      createRecommendation(sessionExcludedTmdbId, 6),
+      ...nonMyListIds.slice(2).map((tmdbId, index) => createRecommendation(tmdbId, index + 7)),
       ...myListMovies.map((movie, index) => createRecommendation(movie.tmdbId, index + 30)),
     ]
     const expectedRecommendationIds = [
-      ...nonMyListIds,
+      ...nonMyListIds.filter((tmdbId) => tmdbId !== sessionExcludedTmdbId),
       ...myListMovies.slice(0, MAX_MY_LIST_RECOMMENDATIONS).map((movie) => movie.tmdbId),
     ]
 
@@ -454,7 +456,9 @@ describe('/api/recommend', () => {
       userMessage: '',
     })
 
-    const response = await fetch(`${baseUrl}/api/recommend?getNew=true`)
+    const response = await fetch(
+      `${baseUrl}/api/recommend?getNew=true&sessionRecommendedTmdbIds=${sessionExcludedTmdbId}`
+    )
     const body = await readJson(response)
 
     expect(response.status).toBe(200)
@@ -462,8 +466,21 @@ describe('/api/recommend', () => {
     expect(body.recommendations).toEqual(expectedRecommendationIds)
     expect(body.recommendations).not.toContain(watchedMovie.tmdbId)
     expect(body.recommendations).not.toContain(200)
+    expect(body.recommendations).not.toContain(sessionExcludedTmdbId)
     expect(body.recommendations).not.toContain(null)
     expect(supabaseState.upsertPayload?.tmdb_ids).toEqual(expectedRecommendationIds)
+    expect(getRecommendationsFromPlatformAiMock.mock.calls[0]?.[4]).toEqual([
+      {
+        name: 'Movie 200',
+        originalName: 'Movie 200',
+        year: 2000,
+        tmdbId: 200,
+      },
+    ])
+    expect(getRecommendationsFromPlatformAiMock.mock.calls[0]?.[5]).toEqual([
+      200,
+      sessionExcludedTmdbId,
+    ])
     expect(logPrivateInfoMock).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'recommendation.filtering_completed',
@@ -471,7 +488,7 @@ describe('/api/recommend', () => {
           aiCandidateCount: candidates.length,
           finalFilteredCount: TARGET_RECOMMENDATIONS,
           removedWatchedCount: 1,
-          removedExcludedCount: 1,
+          removedExcludedCount: 2,
           removedDuplicateCount: 1,
           removedNullTmdbIdCount: 1,
           myListRecommendationsKeptCount: MAX_MY_LIST_RECOMMENDATIONS,

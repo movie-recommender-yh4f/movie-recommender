@@ -1,77 +1,76 @@
 ---
 seo:
-  title: Movie Recommender - Developer Docs
-  description: Technical documentation for the current Movie Recommender codebase.
+  title: NextWatch - Developer Docs
+  description: Technical documentation for the current NextWatch codebase.
 ---
 
-::u-page-hero
-#title
-Movie Recommender
+::div{.nextwatch-landing}
+:landing-mouse-glow
 
-#description
-Developer documentation for the current Movie Recommender codebase.
-
-#links
-  :::u-button
-  ---
-  color: neutral
-  size: xl
-  to: /getting-started/introduction
-  trailing-icon: i-lucide-arrow-right
-  ---
-  Start Here
-  :::
-
-  :::u-button
-  ---
-  color: neutral
-  icon: simple-icons-github
-  size: xl
-  to: https://github.com/movie-recommender-yh4f/movie-recommender/
-  variant: outline
-  ---
-  Star on GitHub
-  :::
-::
-
-::u-page-section
-#title
-Documentation
-
-#features
-  :::u-page-feature
-  ---
-  icon: i-lucide-rocket
-  to: /getting-started/installation
-  ---
+  :::u-page-hero
   #title
-  Getting Started
+  NextWatch
 
   #description
-  Local setup, environment variables, and project orientation
+  Documentation for the current NextWatch codebase, styled to feel like the product it explains.
+
+  #links
+    ::::u-button
+    ---
+    color: primary
+    size: xl
+    to: /getting-started/introduction
+    trailing-icon: i-lucide-arrow-right
+    ---
+    Start Here
+    ::::
+
+    ::::u-button
+    ---
+    color: neutral
+    icon: simple-icons-github
+    size: xl
+    to: https://github.com/anp-studio/nextwatch
+    variant: outline
+    ---
+    Star on GitHub
+    ::::
   :::
 
-  :::u-page-feature
-  ---
-  icon: i-lucide-server
-  to: /api/overview
-  ---
-  #title
-  Backend API
+  :::div{.nextwatch-card-section}
+    ::::div{.nextwatch-feature-grid}
+      :::::landing-feature-card
+      ---
+      eyebrow: "Runtime Setup"
+      title: "Getting Started"
+      chip: "Install + Configure"
+      icon: "i-lucide-rocket"
+      to: "/getting-started/installation"
+      description: "Environment variables, local installation, project structure, and the practical steps to get NextWatch running."
+      ---
+      :::::
 
-  #description
-  AI recommendations, quota, movies, watched, My List, and admin import endpoints
-  :::
+      :::::landing-feature-card
+      ---
+      eyebrow: "Recommendation Engine"
+      title: "Backend API"
+      chip: "Routes + Data Flow"
+      icon: "i-lucide-server"
+      to: "/api/overview"
+      description: "Authenticated routes, recommendation generation, quotas, TMDB ingestion, and the server-side rules behind every result."
+      ---
+      :::::
 
-  :::u-page-feature
-  ---
-  icon: i-lucide-layout
-  to: /frontend/components
-  ---
-  #title
-  Frontend
-
-  #description
-  Pages, components, composables, and application structure
+      :::::landing-feature-card
+      ---
+      eyebrow: "Card Experience"
+      title: "Frontend"
+      chip: "Pages + Composables"
+      icon: "i-lucide-layout"
+      to: "/frontend/components"
+      description: "Pages, composables, and interface structure powering search, watched history, watchlists, and the main recommendation flow."
+      ---
+      :::::
+    ::::
   :::
 ::

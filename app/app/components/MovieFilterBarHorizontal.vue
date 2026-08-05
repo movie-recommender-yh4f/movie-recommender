@@ -65,7 +65,7 @@
             :value="searchQuery"
             type="text"
             :placeholder="searchPlaceholder"
-            class="h-12 w-full rounded-full bg-surface-container-high pl-11 pr-10 text-sm text-on-surface outline-none transition placeholder:text-outline focus:ring-1 focus:ring-primary/30"
+            class="h-12 w-full rounded-full bg-surface-container-high pl-11 pr-10 text-base text-on-surface outline-none transition placeholder:text-outline focus:ring-1 focus:ring-primary/30 sm:text-sm"
             @input="handleSearchInput"
           />
           <button

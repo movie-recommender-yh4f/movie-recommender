@@ -3,6 +3,8 @@
     <NuxtLayout>
       <NuxtPage />
     </NuxtLayout>
+    <PwaInstallModal />
+    <PwaUpdateNotice />
   </div>
 </template>
 

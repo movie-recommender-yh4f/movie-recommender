@@ -354,7 +354,7 @@ async function submitOnboarding() {
       throw new Error('Unable to complete onboarding.')
     }
 
-    await syncWatchedMoviesFromSupabase()
+    await syncWatchedMoviesFromSupabase({ force: true })
     selectedMovieIds.value = []
     await navigateTo('/')
   } catch (caughtError) {
