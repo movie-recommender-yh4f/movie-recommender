@@ -29,6 +29,34 @@ import type {
   WatchedMovieRecord,
 } from './types'
 
+import { logPrivateInfo } from '../shared/api-error'
+
+const RECOMMENDATION_TIMING_SOURCE = 'ai_provider' as const
+
+function logRecommendationTiming(
+  event: H3Event | undefined,
+  userId: string | undefined,
+  action: string,
+  startedAt: number
+): void {
+  if (!event) {
+    return
+  }
+
+  logPrivateInfo({
+    event: 'recommendation.timing',
+    source: RECOMMENDATION_TIMING_SOURCE,
+    statusCode: 200,
+    userId,
+    route: event.path,
+    method: event.method,
+    extra: {
+      action,
+      durationMs: performance.now() - startedAt,
+    },
+  })
+}
+
 function toRecommendation(
   recommendation: InitialModelRecommendation | ReplacementModelRecommendation
 ): Recommendation {
@@ -146,6 +174,7 @@ export async function getRecommendationsFromPlatformAi(
   systemPrompt: string
   userMessage: string
 }> {
+  const requestStartedAt = performance.now()
   const systemPrompt = createRecommendationSystemPrompt()
   const userMessage = buildUserMessage(watchedMovies, myListMovies, excludedMovies)
   const messages: PlatformAiMessage[] = [
@@ -158,15 +187,21 @@ export async function getRecommendationsFromPlatformAi(
       content: userMessage,
     },
   ]
+  logRecommendationTiming(event, userId, 'build_prompt_messages', requestStartedAt)
+
+  const validationStateStartedAt = performance.now()
   const validationState = createRecommendationValidationState(
     watchedMovies,
     myListMovies,
     toBlockedExcludedRecommendations(excludedMovies)
   )
+  logRecommendationTiming(event, userId, 'create_validation_state', validationStateStartedAt)
+
   const acceptedRecommendations: IndexedRecommendationWithId[] = []
   let tmdbFallbackCount = 0
   let aiCandidateCount = 0
 
+  const initialAiRequestStartedAt = performance.now()
   const raw = await askPlatformAi({
     systemPrompt,
     userMessage,
@@ -176,17 +211,25 @@ export async function getRecommendationsFromPlatformAi(
     userId,
     event,
   })
+  logRecommendationTiming(event, userId, 'initial_ai_request', initialAiRequestStartedAt)
   messages.push({
     role: 'assistant',
     content: raw,
   })
 
+  const initialParseStartedAt = performance.now()
   const parsed = parseInitialRecommendationResponse(raw, userId, event)
+  logRecommendationTiming(event, userId, 'parse_initial_response', initialParseStartedAt)
   aiCandidateCount += parsed.length
+
+  const initialResolutionStartedAt = performance.now()
   const initialResult = await resolveInitialRecommendations(parsed, event)
+  logRecommendationTiming(event, userId, 'resolve_initial_recommendations', initialResolutionStartedAt)
   tmdbFallbackCount += initialResult.tmdbFallbackCount
 
+  const initialValidationStartedAt = performance.now()
   let validationResult = validateRecommendationBatch(initialResult.recommendations, validationState)
+  logRecommendationTiming(event, userId, 'validate_initial_recommendations', initialValidationStartedAt)
   acceptedRecommendations.push(...validationResult.accepted)
 
   for (
@@ -196,6 +239,7 @@ export async function getRecommendationsFromPlatformAi(
     validationResult.blocked.length > 0;
     round++
   ) {
+    const replacementPromptStartedAt = performance.now()
     const replacementsNeeded = TARGET_RECOMMENDATIONS - acceptedRecommendations.length
     const followUpMessage = buildReplacementUserMessage(
       toIndexes(validationResult.accepted),
@@ -203,12 +247,14 @@ export async function getRecommendationsFromPlatformAi(
       replacementsNeeded,
       shouldAskForDeeperCuts(validationResult)
     )
+    logRecommendationTiming(event, userId, `build_replacement_prompt_round_${round}`, replacementPromptStartedAt)
 
     messages.push({
       role: 'user',
       content: followUpMessage,
     })
 
+    const replacementAiRequestStartedAt = performance.now()
     const replacementRaw = await askPlatformAi({
       systemPrompt,
       userMessage,
@@ -219,18 +265,37 @@ export async function getRecommendationsFromPlatformAi(
       event,
       rateLimit: false,
     })
+    logRecommendationTiming(event, userId, `replacement_ai_request_round_${round}`, replacementAiRequestStartedAt)
     messages.push({
       role: 'assistant',
       content: replacementRaw,
     })
 
+    const replacementParseStartedAt = performance.now()
     const replacements = parseReplacementRecommendationResponse(replacementRaw, userId, event)
+    logRecommendationTiming(event, userId, `parse_replacement_response_round_${round}`, replacementParseStartedAt)
     aiCandidateCount += replacements.length
+
+    const replacementResolutionStartedAt = performance.now()
     const replacementResult = await resolveReplacementRecommendations(replacements, event)
+    logRecommendationTiming(
+      event,
+      userId,
+      `resolve_replacement_recommendations_round_${round}`,
+      replacementResolutionStartedAt
+    )
     tmdbFallbackCount += replacementResult.tmdbFallbackCount
+
+    const replacementValidationStartedAt = performance.now()
     validationResult = validateRecommendationBatch(
       replacementResult.recommendations,
       validationState
+    )
+    logRecommendationTiming(
+      event,
+      userId,
+      `validate_replacement_recommendations_round_${round}`,
+      replacementValidationStartedAt
     )
     acceptedRecommendations.push(...validationResult.accepted)
   }

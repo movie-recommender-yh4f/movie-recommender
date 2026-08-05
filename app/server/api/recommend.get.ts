@@ -207,6 +207,28 @@ function getErrorStatusMessage(error: unknown): string {
   return 'Unable to generate recommendations right now.'
 }
 
+const RECOMMENDATION_TIMING_SOURCE = 'ai_provider' as const
+
+function logRecommendationTiming(
+  event: H3Event,
+  userId: string,
+  action: string,
+  startedAt: number
+): void {
+  logPrivateInfo({
+    event: 'recommendation.timing',
+    source: RECOMMENDATION_TIMING_SOURCE,
+    statusCode: 200,
+    userId,
+    route: event.path,
+    method: event.method,
+    extra: {
+      action,
+      durationMs: performance.now() - startedAt,
+    },
+  })
+}
+
 function buildRegenerationFallbackResponse(
   error: unknown,
   staleRecommendationIds: number[]
@@ -304,14 +326,23 @@ async function storeCachedRecommendations(
 }
 
 export default defineEventHandler(async (event) => {
+  const requestStartedAt = performance.now()
+  const authorizationStartedAt = performance.now()
   const { supabase, user } = await getAuthorizedUser(event)
+  logRecommendationTiming(event, user.id, 'authorize_user', authorizationStartedAt)
+
+  const onboardingStartedAt = performance.now()
   await requireCompletedOnboarding(event, supabase, user.id)
+  logRecommendationTiming(event, user.id, 'check_onboarding', onboardingStartedAt)
+
   const { getNew, refresh } = getQuery(event)
   const isGetNew = isQueryFlagEnabled(getNew)
   const isRefresh = !isGetNew && isQueryFlagEnabled(refresh)
 
   const redis = createRedisClient()
+  const lockStartedAt = performance.now()
   const lock = await acquireRecommendationLock(redis, user.id)
+  logRecommendationTiming(event, user.id, 'acquire_lock', lockStartedAt)
 
   if (!lock) {
     throw createError({
@@ -321,7 +352,9 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
+    const watchedMoviesStartedAt = performance.now()
     const watchedMovies = await fetchWatchedMovies(supabase, user.id, { event })
+    logRecommendationTiming(event, user.id, 'fetch_watched_movies', watchedMoviesStartedAt)
     let excludedMovies: RecommendationWithId[] = []
 
     if (watchedMovies.length === 0) {
@@ -331,25 +364,36 @@ export default defineEventHandler(async (event) => {
       })
     }
 
+    const watchedHashStartedAt = performance.now()
     const watchedHash = computeWatchedHash(watchedMovies)
+    logRecommendationTiming(event, user.id, 'compute_watched_hash', watchedHashStartedAt)
+
+    const cacheStateStartedAt = performance.now()
     const cacheState = await getRecommendationCacheState(event, supabase, user.id, watchedHash)
+    logRecommendationTiming(event, user.id, 'load_recommendation_cache', cacheStateStartedAt)
 
     if (!isGetNew && !isRefresh && cacheState.freshRecommendationIds) {
+      logRecommendationTiming(event, user.id, 'return_fresh_cache', requestStartedAt)
       return buildSuccessResponse(cacheState.freshRecommendationIds, true)
     }
 
+    const myListMoviesStartedAt = performance.now()
     const myListMovies = await fetchMyListMovies(supabase, user.id, { event })
+    logRecommendationTiming(event, user.id, 'fetch_my_list_movies', myListMoviesStartedAt)
 
     if (isGetNew && cacheState.storedRecommendationIds.length > 0) {
+      const excludedMoviesStartedAt = performance.now()
       excludedMovies = await hydrateRecommendationsByTmdbIds(
         supabase,
         cacheState.storedRecommendationIds,
         { event, userId: user.id }
       )
+      logRecommendationTiming(event, user.id, 'hydrate_excluded_recommendations', excludedMoviesStartedAt)
     }
 
     let recommendations: RecommendationWithId[]
     try {
+      const platformAiStartedAt = performance.now()
       const platformAiResult = await getRecommendationsFromPlatformAi(
         watchedMovies,
         myListMovies,
@@ -357,13 +401,17 @@ export default defineEventHandler(async (event) => {
         event,
         excludedMovies
       )
+      logRecommendationTiming(event, user.id, 'load_from_platform_ai', platformAiStartedAt)
       const generatedRecommendations = platformAiResult.recommendations
+
+      const filteringStartedAt = performance.now()
       const filteredResult = filterFinalRecommendations(
         generatedRecommendations,
         watchedMovies,
         myListMovies,
         excludedMovies
       )
+      logRecommendationTiming(event, user.id, 'filter_final_recommendations', filteringStartedAt)
       recommendations = filteredResult.recommendations
 
       logPrivateInfo({
@@ -408,10 +456,13 @@ export default defineEventHandler(async (event) => {
       return buildRegenerationFallbackResponse(error, cacheState.storedRecommendationIds)
     }
 
+    const storeRecommendationsStartedAt = performance.now()
     await storeCachedRecommendations(event, supabase, user.id, recommendations, watchedHash)
+    logRecommendationTiming(event, user.id, 'store_recommendations', storeRecommendationsStartedAt)
 
     return buildSuccessResponse(toRecommendationIds(recommendations), false)
   } finally {
+    logRecommendationTiming(event, user.id, 'total_request', requestStartedAt)
     await releaseRecommendationLock(redis, lock)
   }
 })
