@@ -1,5 +1,5 @@
 import {
-  INITIAL_RECOMMENDATION_COUNT,
+  getInitialRecommendationCount,
   MAX_MY_LIST_RECOMMENDATIONS,
   TARGET_RECOMMENDATIONS,
   UNKNOWN_YEAR_LABEL,
@@ -10,7 +10,7 @@ import type { WatchedMovieRecord } from './types'
 const SYSTEM_PROMPT = `You are a movie recommendation engine.
 Analyze the user's taste profile from their watch history: preferred genres, directors, eras, themes, and tone.
 
-Recommend exactly ${INITIAL_RECOMMENDATION_COUNT} candidate movies, obeying these rules:
+Recommend exactly __INITIAL_RECOMMENDATION_COUNT__ candidate movies, obeying these rules:
 1. Backend validation is the source of truth. You suggest candidates; the server will remove watched movies, repeated recommendations, unresolved titles, duplicate TMDB matches, and excess My List matches.
 2. WATCHLIST (My List): The user already knows about these movies and has deliberately saved them. Prefer undiscovered movies; the server will keep at most ${MAX_MY_LIST_RECOMMENDATIONS} My List matches.
 3. Aim for variety across genres and decades while staying true to the inferred taste profile.
@@ -100,7 +100,9 @@ export const REPLACEMENT_RESPONSE_SCHEMA = {
 } satisfies Record<string, unknown>
 
 export function createRecommendationSystemPrompt(): string {
-  return `${SYSTEM_PROMPT}\n${EXACT_ORIGINAL_TITLE_PROMPT_SUFFIX}\n${POPULAR_MOVIE_PROMPT_SUFFIX}`
+  const initialRecommendationCount = getInitialRecommendationCount()
+  const systemPrompt = SYSTEM_PROMPT.replace('__INITIAL_RECOMMENDATION_COUNT__', initialRecommendationCount.toString())
+  return `${systemPrompt}\n${EXACT_ORIGINAL_TITLE_PROMPT_SUFFIX}\n${POPULAR_MOVIE_PROMPT_SUFFIX}`
 }
 
 function formatRecommendationYear(year: number | null): string {
@@ -129,6 +131,7 @@ export function buildUserMessage(
   myListMovies: WatchedMovieRecord[],
   excludedMovies: Array<{ name: string; originalName?: string; year: number | null }> = []
 ): string {
+  const initialRecommendationCount = getInitialRecommendationCount()
   const tasteProfile = buildTasteProfile(watchedMovies, myListMovies)
   const topGenres = tasteProfile.topGenres.length > 0 ? tasteProfile.topGenres.join(', ') : 'None'
   const favoriteDecades =
@@ -161,7 +164,7 @@ ${formatPromptMovies(tasteProfile.topWatchedMovies, false)}
 MY LIST REMINDERS:
 ${formatPromptMovies(tasteProfile.myListReminderMovies, false)}
 ${excludedSection}
-Recommend exactly ${INITIAL_RECOMMENDATION_COUNT} candidate movies I would enjoy. These are candidates, not final output: the server will remove watched movies, recently recommended movies, unresolved titles, duplicates, and excess My List matches before keeping up to ${TARGET_RECOMMENDATIONS} final recommendations. At most ${MAX_MY_LIST_RECOMMENDATIONS} final recommendations may come from My List.
+Recommend exactly ${initialRecommendationCount} candidate movies I would enjoy. These are candidates, not final output: the server will remove watched movies, recently recommended movies, unresolved titles, duplicates, and excess My List matches before keeping up to ${TARGET_RECOMMENDATIONS} final recommendations. At most ${MAX_MY_LIST_RECOMMENDATIONS} final recommendations may come from My List.
 Prefer undiscovered movies over My List reminders.`
 }
 

@@ -25,6 +25,15 @@ export interface MovieSearchResult {
   year: number
 }
 
+interface RpcMovieSearchRow {
+  query: string
+  year: number | null
+  tmdb_id: number
+  original_title: string
+  popularity: number
+  release_date: string
+}
+
 interface SearchCandidate {
   query: string
   year?: number
@@ -141,11 +150,36 @@ export async function searchMoviesBatch(
   }
 
   const supabase = createSearchSupabaseClient()
-  const searchResults = await Promise.all(
-    uniqueCandidates.map(
-      async ({ query, year }) => [`${query}::${year ?? ''}`, await executeSearch(supabase, query, year)] as const
-    )
-  )
+  const { data, error } = await supabase.rpc('search_movies_batch', {
+    search_candidates: uniqueCandidates,
+  })
 
-  return new Map(searchResults)
+  if (error) {
+    logPrivateError({
+      cause: error,
+      event: 'movie_search.batch_query_failed',
+      source: 'supabase',
+      statusCode: 500,
+      extra: { candidateCount: uniqueCandidates.length },
+    })
+
+    throw createError({ statusCode: 500, statusMessage: MOVIE_SEARCH_UNAVAILABLE_MESSAGE })
+  }
+
+  const results = new Map<string, MovieSearchResult[]>()
+  for (const row of (data ?? []) as RpcMovieSearchRow[]) {
+    const key = `${row.query}::${row.year ?? ''}`
+    const currentResults = results.get(key) ?? []
+    if (currentResults.length >= MAX_RESULTS) continue
+
+    currentResults.push({
+      tmdb_id: row.tmdb_id,
+      original_title: row.original_title,
+      popularity: row.popularity,
+      year: parseYear(row.release_date),
+    })
+    results.set(key, currentResults)
+  }
+
+  return results
 }

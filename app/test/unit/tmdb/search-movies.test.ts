@@ -175,6 +175,13 @@ describe('searchMovies', () => {
 
     createClientMock.mockReturnValue({
       from: vi.fn().mockImplementation(() => createBuilder(rowsByQuery)),
+      rpc: vi.fn().mockResolvedValue({
+        data: [
+          { query: 'Matrix', year: 1999, tmdb_id: 604, original_title: 'The Matrix', popularity: 99, release_date: '1999-03-31' },
+          { query: 'Alien', year: null, tmdb_id: 348, original_title: 'Alien', popularity: 88, release_date: '1979-05-25' },
+        ],
+        error: null,
+      }),
     })
 
     const results = await searchMoviesBatch([
