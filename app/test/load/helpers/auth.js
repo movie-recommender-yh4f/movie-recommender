@@ -71,12 +71,17 @@ export function getAccountForVu(vuId = __VU) {
   return accounts[index]
 }
 
-export function loginForVu(scenario, vuId = __VU) {
-  if (cachedSession && cachedSession.vuId === vuId) {
+export function loginForVu(scenario, accountVuId = __VU) {
+  const vuId = __VU
+  if (
+    cachedSession &&
+    cachedSession.vuId === vuId &&
+    cachedSession.accountVuId === accountVuId
+  ) {
     return cachedSession
   }
 
-  const account = getAccountForVu(vuId)
+  const account = getAccountForVu(accountVuId)
   const supabaseUrl = requiredEnv('LOAD_TEST_SUPABASE_URL').replace(/\/+$/, '')
   const anonKey = requiredEnv('LOAD_TEST_SUPABASE_ANON_KEY')
   const response = http.post(
@@ -94,6 +99,7 @@ export function loginForVu(scenario, vuId = __VU) {
         route: AUTH_ROUTE_TAG,
         scenario,
         auth_state: 'credential_exchange',
+        user_type: 'authenticated',
       },
     }
   )
@@ -109,14 +115,15 @@ export function loginForVu(scenario, vuId = __VU) {
     throw new Error('Supabase login failed for the stable account assigned to VU ' + vuId + '.')
   }
 
-  const body = response.json()
-  if (!body.access_token) {
+  const responseBody = response.json()
+  if (!responseBody.access_token) {
     throw new Error('Supabase login response did not include an access token.')
   }
 
   cachedSession = {
-    accessToken: body.access_token,
+    accessToken: responseBody.access_token,
     account,
+    accountVuId,
     vuId,
   }
 

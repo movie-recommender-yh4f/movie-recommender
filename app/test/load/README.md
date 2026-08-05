@@ -143,7 +143,7 @@ Set-Location 'D:\Aki\NextWatch\movie-recommender\app'
 $env:LOAD_TEST_SUPABASE_URL = 'https://PROJECT_REF.supabase.co'
 $env:LOAD_TEST_EXPECTED_PROJECT_REF = 'PROJECT_REF'
 $env:PRODUCTION_SUPABASE_PROJECT_REFS = 'YOUR-PRODUCTION-PROJECT-REF'
-$env:LOAD_TEST_USER_COUNT = '10'
+$env:LOAD_TEST_USER_COUNT = '30'
 $env:LOAD_TEST_USER_PREFIX = 'nextwatch-loadtest'
 $env:LOAD_TEST_USER_EMAIL_DOMAIN = 'example.invalid'
 $env:LOAD_TEST_WATCHED_TMDB_IDS = '550,680,155,13,122'
@@ -158,6 +158,13 @@ Remove-Item Env:LOAD_TEST_SUPABASE_SERVICE_ROLE_KEY
 ```
 
 The fixture is app/test/load/data/accounts.json. It contains synthetic email, password, user ID, and marker only. It never contains tokens or service-role keys.
+
+Each authenticated VU keeps one stable, distinct account for the run. `stress-authenticated` therefore needs at least the maximum value in `AUTH_STRESS_LEVELS`. `stress-mixed` needs the authenticated allocation at its maximum total level: 80% for the default levels, rounded so both groups have at least one VU when the total is at least two. With the defaults, the requirements are:
+
+- `stress-authenticated`: 30 accounts;
+- `stress-mixed`: 24 accounts (80% of the 30-VU maximum).
+
+Both scenarios validate capacity before the protected preflight or any workload iteration. Increase `LOAD_TEST_USER_COUNT`, rerun `npm run load:users:create`, and keep `LOAD_TEST_ACCOUNTS_FILE` pointed at the generated fixture when custom levels require more accounts.
 
 ## Common k6 shell setup
 
@@ -189,6 +196,8 @@ Get-Item Env:LOAD_TEST_SUPABASE_SERVICE_ROLE_KEY -ErrorAction SilentlyContinue
 | mixed-workload       | 10 VUs, 5m                        | Assumed 65% browse, 25% account, 10% mock recommendation                       | Staging services; mock only  |
 | spike                | 2 to 20 VUs                       | Cold starts, autoscaling, recovery                                             | Staging services             |
 | stress               | 5/10/20/30 VUs                    | Staged degradation with abort thresholds                                       | Staging services             |
+| stress-authenticated | 5/10/20/30 authenticated VUs      | Staged auth, watched/list, metadata, and bounded mutations; no recommendations | Supabase/Redis               |
+| stress-mixed         | 5/10/20/30 total VUs at 80/20     | Separate authenticated and anonymous staged executors; no recommendations      | Staging services             |
 | soak                 | 5 VUs, 20m                        | Drift, sessions, connections, cache/log volume                                 | Staging services             |
 | recommendations-mock | 5 users, bounded                  | Distinct-user concurrency and same-user duplicate lock                         | No AI credits                |
 | recommendations-real | 1 VU, 1 request                   | Real OpenRouter latency/reliability through app endpoint                       | OpenRouter and staging usage |
@@ -308,7 +317,31 @@ $env:STRESS_LEVELS = '5,10,20,30'
 
 Levels above 50 require ALLOW_HIGH_VU_COUNT=true and are still capped at 200. Unexpected failures above 10% or sustained p95 above the configured stress threshold abort the run after the evaluation delay.
 
-### 11. Soak
+### 11. Authenticated stress stages
+
+Provide at least as many accounts as the largest configured level. The workflow performs login, watched/My List reads, metadata lookup, and a bounded My List add/remove cycle. It never calls `/api/recommend`.
+
+```powershell
+$env:AUTH_STRESS_LEVELS = '5,10,20,30'
+$env:AUTH_STRESS_STAGE_DURATION = '1m'
+.\test\load\run-load-test.ps1 -Scenario stress-authenticated
+```
+
+A stage duration above 30 minutes requires `ALLOW_LONG_AUTH_STRESS=true` and remains subject to the absolute duration cap. Levels above 50 require `ALLOW_HIGH_VU_COUNT=true`; no level can exceed 200.
+
+### 12. Mixed stress stages
+
+This profile uses two ramping-VU scenarios, not per-iteration random selection. At every level, approximately 80% of VUs run authenticated activity and 20% run public browsing. Totals of two or more always allocate at least one VU to each group. Only the authenticated allocation needs accounts; the default 30-VU maximum needs 24.
+
+```powershell
+$env:MIXED_STRESS_LEVELS = '5,10,20,30'
+$env:MIXED_STRESS_STAGE_DURATION = '1m'
+.\test\load\run-load-test.ps1 -Scenario stress-mixed
+```
+
+The two groups are tagged `user_type=authenticated` and `user_type=anonymous`. This profile reuses the existing browse and authenticated workflows and never calls `/api/recommend`. A stage duration above 30 minutes requires `ALLOW_LONG_MIXED_STRESS=true`; the same 50-VU approval gate and 200-VU absolute maximum apply to total VUs.
+
+### 13. Soak
 
 ```powershell
 $env:SOAK_VUS = '5'
@@ -318,7 +351,7 @@ $env:SOAK_DURATION = '20m'
 
 Durations above 30 minutes require ALLOW_LONG_SOAK=true and remain absolutely capped.
 
-### 12. One signup smoke
+### 14. One signup smoke
 
 Use a sandbox inbox and a fresh hCaptcha token. This sends at most one signup request.
 
@@ -335,7 +368,7 @@ $env:HCAPTCHA_TEST_TOKEN = [Net.NetworkCredential]::new('', $captchaToken).Passw
 
 Manually inspect Supabase Auth and the SMTP sandbox to confirm user creation, email request/delivery, redirect, link expiry/reuse, resend limits, and post-confirmation session. Those steps are intentionally not automated at volume.
 
-### 13. Strictly capped real OpenRouter
+### 15. Strictly capped real OpenRouter
 
 Use a separate deployment with provider mode live, mock disabled, no Google key, and only the spending-limited OpenRouter test key. The status preflight must report OpenRouter first.
 
@@ -374,6 +407,10 @@ During every staged run, use the same UTC interval:
 - Load generator: CPU, memory, network saturation, dropped iterations, and clock accuracy.
 
 Interpret 429 by route and scenario. An expected limiter 429 is not a capacity failure. An unexpected 429, 5xx, timeout, threshold abort, database connection failure, or load-generator saturation is separate evidence.
+
+For the two new stress profiles, compare the tagged `route_duration`, `checks`, `authentication_failure_rate`, `expected_rate_limits`, `status_429`, `unexpected_4xx_rate`, `unexpected_5xx_rate`, `timeout_rate`, and `unexpected_failures` metrics. In `stress-mixed`, filter or compare by `user_type` before drawing a capacity conclusion; a healthy aggregate can hide degradation in one group. Checks are also named per route, so use them to distinguish a failing login, watched/list operation, metadata request, mutation, or anonymous browse route.
+
+Expected limiter responses contribute to `expected_rate_limits` and `status_429` but not to `unexpected_failures`. An unexpected 429 contributes to `unexpected_4xx_rate` and `unexpected_failures`; 5xx and timeouts retain their own metrics.
 
 ## Cleanup
 

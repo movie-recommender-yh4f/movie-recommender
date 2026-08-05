@@ -16,12 +16,14 @@ const DEFAULT_THINK_TIME_SECONDS = 1
 const DEFAULT_MUTATION_MOVIE_ID = 603
 
 function requestOptions(route, scenario, authState, headers = {}) {
+  const userType = authState === 'authenticated' ? 'authenticated' : 'anonymous'
   return {
     headers,
     tags: {
       route,
       scenario,
       auth_state: authState,
+      user_type: userType,
     },
   }
 }
@@ -85,9 +87,9 @@ export function browseOnce(scenario) {
   sleep(thinkTime)
 }
 
-export function authenticatedOnce(scenario) {
+export function authenticatedOnce(scenario, accountVuId = __VU) {
   const baseUrl = getBaseUrl()
-  const session = loginForVu(scenario)
+  const session = loginForVu(scenario, accountVuId)
   const headers = authorizationHeaders(session)
 
   const watchedResponse = http.get(

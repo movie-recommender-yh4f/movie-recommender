@@ -10,6 +10,8 @@ param(
     'mixed-workload',
     'spike',
     'stress',
+    'stress-authenticated',
+    'stress-mixed',
     'soak',
     'recommendations-mock',
     'recommendations-real',
@@ -30,6 +32,8 @@ $scenarioFiles = @{
   'mixed-workload' = 'mixed-workload.js'
   'spike' = 'spike.js'
   'stress' = 'stress.js'
+  'stress-authenticated' = 'stress-authenticated.js'
+  'stress-mixed' = 'stress-mixed.js'
   'soak' = 'soak.js'
   'recommendations-mock' = 'recommendations-mock.js'
   'recommendations-real' = 'recommendations-real.js'

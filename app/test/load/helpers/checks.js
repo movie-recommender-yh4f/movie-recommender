@@ -9,9 +9,13 @@ import {
 
 export function classifyResponse(response, options) {
   const classification = recordResponse(response, options)
-  const passed = check(response, {
-    ['expected status for ' + options.route]: () => classification.expectedResponse,
-  })
+  const passed = check(
+    response,
+    {
+      ['expected status for ' + options.route]: () => classification.expectedResponse,
+    },
+    classification.tags
+  )
 
   return {
     ...classification,
@@ -21,10 +25,7 @@ export function classifyResponse(response, options) {
 
 export function classifyAuthResponse(response, options) {
   const result = classifyResponse(response, options)
-  authFailureRate.add(!result.expectedResponse, {
-    route: options.route,
-    scenario: options.scenario,
-  })
+  authFailureRate.add(!result.expectedResponse, result.tags)
   return result
 }
 
