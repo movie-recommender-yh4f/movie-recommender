@@ -5,6 +5,8 @@ const { createClientMock } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
 }))
 
+const rpcMock = vi.fn((_name: string, args: { search_candidates: Array<{ query: string; year?: number }> }) => Promise.resolve({ data: args.search_candidates.flatMap(({ query, year }) => { const normalized = query.toLowerCase(); const tmdbId = normalized === 'suspiria' ? (year === 1977 ? 11907 : 11906) : normalized === 'stalker' ? 1398 : normalized === 'alien' ? 1 : normalized.startsWith('candidate ') ? 1000 + Number.parseInt(normalized.slice('candidate '.length), 10) - 1 : normalized.startsWith('recovered ') ? 1400 + Number.parseInt(normalized.slice('recovered '.length), 10) - 1 : normalized === 'replacement one' ? 2000 : normalized === 'replacement two' ? 2001 : null; return tmdbId === null ? [] : [{ query, year: year ?? null, tmdb_id: tmdbId, original_title: query, popularity: 50, release_date: (year ?? 2000).toString() + '-01-01' }]; }), error: null }))
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: createClientMock,
 }))
@@ -26,7 +28,7 @@ vi.mock('../../../server/utils/recommendations/ai-client', () => ({
 }))
 
 const {
-  AI_CANDIDATE_RECOMMENDATIONS,
+  getInitialRecommendationCount,
   INITIAL_RECOMMENDATION_COUNT,
   MAX_MY_LIST_RECOMMENDATIONS,
 } = await import('../../../server/utils/recommendations/constants')
@@ -130,6 +132,7 @@ function setupSearchRows(movies: SearchMovieFixture[]): void {
     })),
   })
   createClientMock.mockReturnValue({
+      rpc: rpcMock,
     from: vi.fn().mockImplementation(() => createBuilder(createRowsByTitle(movies))),
   })
 }
@@ -164,6 +167,7 @@ describe('appendTmdbIds', () => {
 
   it('prefers a result whose cached year matches the Gemini recommendation year', async () => {
     createClientMock.mockReturnValue({
+      rpc: rpcMock,
       from: vi.fn().mockImplementation(() =>
         createBuilder(
           new Map([
@@ -208,6 +212,7 @@ describe('appendTmdbIds', () => {
 
   it('falls back to the top result when no cached year matches', async () => {
     createClientMock.mockReturnValue({
+      rpc: rpcMock,
       from: vi.fn().mockImplementation(() =>
         createBuilder(
           new Map([
@@ -251,6 +256,7 @@ describe('appendTmdbIds', () => {
 
   it('returns null when Supabase search does not find a match and no event is provided', async () => {
     createClientMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
       from: vi.fn().mockImplementation(() =>
         createBuilder(
           new Map([
@@ -273,6 +279,7 @@ describe('appendTmdbIds', () => {
 
   it('falls back to TMDB search with year when Supabase search misses a movie', async () => {
     createClientMock.mockReturnValue({
+      rpc: rpcMock,
       from: vi.fn().mockImplementation(() =>
         createBuilder(
           new Map([
@@ -314,6 +321,7 @@ describe('appendTmdbIds', () => {
 
   it('skips a TMDB fallback movie when the TMDB rate limit is reached', async () => {
     createClientMock.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
       from: vi.fn().mockImplementation(() =>
         createBuilder(new Map([['stalker:*::1979-01-01::1979-12-31', []], ['stalker:*::::', []]]))
       ),
@@ -334,11 +342,12 @@ describe('appendTmdbIds', () => {
 
   it('hydrates the larger AI candidate pool before final route filtering', async () => {
     createClientMock.mockReturnValue({
+      rpc: rpcMock,
       from: vi.fn().mockImplementation(() => createBuilder(new Map())),
     })
 
     const recommendations = Array.from(
-      { length: AI_CANDIDATE_RECOMMENDATIONS + 5 },
+      { length: getInitialRecommendationCount() + 5 },
       (_, index) => ({
         name: `Candidate ${index + 1}`,
         originalName: `Candidate ${index + 1}`,
@@ -348,7 +357,7 @@ describe('appendTmdbIds', () => {
 
     const results = await appendTmdbIds(recommendations)
 
-    expect(results.recommendations).toHaveLength(AI_CANDIDATE_RECOMMENDATIONS)
+    expect(results.recommendations).toHaveLength(getInitialRecommendationCount())
   })
 })
 
@@ -545,7 +554,7 @@ describe('getRecommendationsFromPlatformAi', () => {
     expect(askPlatformAiResponseMock).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: expect.stringContaining(
-          `exactly ${INITIAL_RECOMMENDATION_COUNT} candidate movies`
+          `exactly ${getInitialRecommendationCount()} candidate movies`
         ),
         messages: expect.arrayContaining([
           expect.objectContaining({
