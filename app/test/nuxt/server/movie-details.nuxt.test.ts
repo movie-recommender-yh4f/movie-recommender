@@ -92,6 +92,7 @@ interface MovieRow {
 interface MovieState {
   row: MovieRow | null
   upsertPayload: Record<string, unknown> | null
+  refreshRequest: { functionName: string; body: unknown } | null
 }
 
 const FRESH_DATE = '2026-04-01T00:00:00.000Z'
@@ -117,6 +118,12 @@ const completeRow: MovieRow = {
 
 function createMockSupabase(state: MovieState) {
   return {
+    functions: {
+      async invoke(functionName: string, options: { body: unknown }) {
+        state.refreshRequest = { functionName, body: options.body }
+        return { error: null }
+      },
+    },
     from(table: string) {
       expect(table).toBe('movies')
 
@@ -238,6 +245,7 @@ describe('/api/movies/:id', () => {
     state = {
       row: { ...completeRow },
       upsertPayload: null,
+      refreshRequest: null,
     }
     getServiceSupabaseMock.mockReturnValue(createMockSupabase(state))
     getOptionalAuthorizedUserMock.mockResolvedValue(null)
@@ -275,22 +283,18 @@ describe('/api/movies/:id', () => {
         [GUEST_IP_HEADER]: GUEST_IP,
       },
     })
+    const body = await readJson(response)
 
     expect(response.status).toBe(200)
-    expect(getMovieDetailsNegativeCacheMock).toHaveBeenCalledWith(550)
-    expect(limitMovieDetailsMissesMock).toHaveBeenCalledWith(expect.anything(), {
-      guestIp: GUEST_IP,
+    expect(body.title).toBe('Fight Club')
+    expect(state.refreshRequest).toEqual({
+      functionName: 'refresh-movie',
+      body: { tmdbId: 550 },
     })
-    expect(fetchTmdbMock).toHaveBeenCalledWith(expect.anything(), '/movie/550', {
-      append_to_response: 'credits,videos',
-    })
-    expect(state.upsertPayload).toMatchObject({
-      tmdb_id: 550,
-      title: 'Fight Club',
-      runtime: 139,
-      genres: ['Drama'],
-      cached_at: '2026-04-26T00:00:00.000Z',
-    })
+    expect(getMovieDetailsNegativeCacheMock).not.toHaveBeenCalled()
+    expect(limitMovieDetailsMissesMock).not.toHaveBeenCalled()
+    expect(fetchTmdbMock).not.toHaveBeenCalled()
+    expect(state.upsertPayload).toBeNull()
   })
 
   it('refreshes the cache when required sentinel fields are missing', async () => {
