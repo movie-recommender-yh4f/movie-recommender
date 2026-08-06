@@ -10,7 +10,7 @@ import {
   setMovieDetailsNegativeCache,
 } from '../../utils/movies/negative-cache'
 import { createServiceSupabaseClient } from '../../utils/shared/supabase-client'
-import { throwSupabaseError } from '../../utils/shared/api-error'
+import { logPrivateError, throwSupabaseError } from '../../utils/shared/api-error'
 import { IMAGE_BASE } from '../../utils/tmdb/constants'
 import { fetchTmdb } from '../../utils/tmdb/client'
 
@@ -127,6 +127,11 @@ function formatDuration(runtime: number): string {
   return `${Math.floor(runtime / MINUTES_PER_HOUR)}h ${runtime % MINUTES_PER_HOUR}m`
 }
 
+const REFRESH_MOVIE_FUNCTION = 'refresh-movie'
+const BACKGROUND_REFRESH_ERROR_STATUS = 502
+
+const BACKGROUND_REFRESH_REQUEST_FAILED_EVENT = 'movie_details.background_refresh_request_failed'
+
 function isCacheStale(cachedAt: string | null): boolean {
   if (!cachedAt) {
     return true
@@ -151,14 +156,6 @@ function isMovieRowComplete(row: MovieRow): boolean {
     row.cast.length > 0 &&
     row.directors.length > 0
   )
-}
-
-function shouldRefreshMovie(row: MovieRow | null): boolean {
-  if (!row) {
-    return true
-  }
-
-  return isCacheStale(row.cached_at) || !isMovieRowComplete(row)
 }
 
 function pickTrailer(data: TMDBMovieDetails) {
@@ -243,6 +240,38 @@ async function fetchCachedMovie(
   }
 
   return { supabase, row: data as MovieRow | null }
+}
+
+async function requestMovieRefresh(
+  event: H3Event,
+  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  tmdbId: number,
+): Promise<void> {
+  let refreshError: unknown = null
+
+  try {
+    const { error } = await supabase.functions.invoke(REFRESH_MOVIE_FUNCTION, {
+      body: { tmdbId },
+    })
+    refreshError = error
+  } catch (error: unknown) {
+    refreshError = error
+  }
+
+  if (refreshError === null) {
+    return
+  }
+
+  logPrivateError({
+    cause: refreshError,
+    event: BACKGROUND_REFRESH_REQUEST_FAILED_EVENT,
+    source: 'supabase',
+    statusCode: BACKGROUND_REFRESH_ERROR_STATUS,
+    route: event.path,
+    method: event.method,
+    tmdbId,
+    extra: { functionName: REFRESH_MOVIE_FUNCTION },
+  })
 }
 
 function getTrustedGuestIp(event: H3Event): string | null {
@@ -350,7 +379,11 @@ export default defineEventHandler(async (event): Promise<MovieResponse> => {
 
   const { supabase, row } = await fetchCachedMovie(event, id)
 
-  if (!shouldRefreshMovie(row) && row) {
+  if (row && isMovieRowComplete(row)) {
+    if (isCacheStale(row.cached_at)) {
+      await requestMovieRefresh(event, supabase, id)
+    }
+
     return toMovieResponse(row)
   }
 
