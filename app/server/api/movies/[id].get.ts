@@ -119,12 +119,6 @@ function parseYear(releaseDate: string): number {
   return parseInt(releaseDate.split('-')[0] || '0', 10)
 }
 
-/**
- * Formats a runtime as hours and minutes.
- *
- * @param runtime - The runtime in minutes
- * @returns `N/A` for a nonpositive runtime; otherwise, the runtime formatted as hours and minutes
- */
 function formatDuration(runtime: number): string {
   if (runtime <= 0) {
     return 'N/A'
@@ -138,12 +132,6 @@ const BACKGROUND_REFRESH_ERROR_STATUS = 502
 
 const BACKGROUND_REFRESH_REQUEST_FAILED_EVENT = 'movie_details.background_refresh_request_failed'
 
-/**
- * Determines whether a cached movie entry requires refreshing.
- *
- * @param cachedAt - The timestamp recorded when the entry was cached
- * @returns `true` if the timestamp is missing, invalid, or older than the cache lifetime, `false` otherwise.
- */
 function isCacheStale(cachedAt: string | null): boolean {
   if (!cachedAt) {
     return true
@@ -157,12 +145,6 @@ function isCacheStale(cachedAt: string | null): boolean {
   return cachedTime <= Date.now() - CACHE_TTL_MS
 }
 
-/**
- * Determines whether a movie row contains all required movie details.
- *
- * @param row - The movie row to assess
- * @returns `true` if the row has complete required details, `false` otherwise
- */
 function isMovieRowComplete(row: MovieRow): boolean {
   return (
     row.title.trim().length > 0 &&
@@ -176,11 +158,6 @@ function isMovieRowComplete(row: MovieRow): boolean {
   )
 }
 
-/**
- * Selects the newest official YouTube trailer from movie video results.
- *
- * @returns The newest matching trailer, or `undefined` if no official YouTube trailer exists.
- */
 function pickTrailer(data: TMDBMovieDetails) {
   return data.videos.results
     .filter((video) => video.site === YOUTUBE_SITE && video.type === TRAILER_TYPE && video.official)
@@ -237,13 +214,6 @@ function tmdbDetailsToRow(data: TMDBMovieDetails, cachedAt: string): MovieRow {
   }
 }
 
-/**
- * Reads a movie row from the cache by its TMDB identifier.
- *
- * @param event - The request context used to create the Supabase client
- * @param id - The movie's TMDB identifier
- * @returns The Supabase client and the cached movie row, or `null` when no matching row exists
- */
 async function fetchCachedMovie(
   event: Parameters<typeof createServiceSupabaseClient>[0],
   id: number
@@ -272,13 +242,6 @@ async function fetchCachedMovie(
   return { supabase, row: data as MovieRow | null }
 }
 
-/**
- * Requests a background refresh for a movie and logs failures without interrupting the caller.
- *
- * @param event - The request event used to record route and method context for failures
- * @param supabase - The Supabase service client
- * @param tmdbId - The TMDB movie identifier to refresh
- */
 async function requestMovieRefresh(
   event: H3Event,
   supabase: ReturnType<typeof createServiceSupabaseClient>,
@@ -311,11 +274,6 @@ async function requestMovieRefresh(
   })
 }
 
-/**
- * Extracts the first client IP address from the trusted Vercel forwarding header.
- *
- * @returns The trimmed client IP address, or `null` when the header is missing or empty.
- */
 function getTrustedGuestIp(event: H3Event): string | null {
   const vercelForwardedFor = getHeader(event, VERCEL_FORWARDED_FOR_HEADER)
 
