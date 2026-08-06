@@ -1,4 +1,5 @@
 import type { H3Event } from 'h3'
+import { waitUntil } from '@vercel/functions'
 import { getOptionalAuthorizedUser } from '../../utils/auth/authorize-user'
 import {
   limitMovieDetailsBurst,
@@ -381,7 +382,7 @@ export default defineEventHandler(async (event): Promise<MovieResponse> => {
 
   if (row && isMovieRowComplete(row)) {
     if (isCacheStale(row.cached_at)) {
-      await requestMovieRefresh(event, supabase, id)
+      waitUntil(requestMovieRefresh(event, supabase, id))
     }
 
     return toMovieResponse(row)
